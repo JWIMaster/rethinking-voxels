@@ -1,0 +1,14 @@
+{
+  "export": "C:\\Users\\jwalr\\rethinking-voxels\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "installed": [
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion.zip",
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip"
+  ],
+  "backup": "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\shaderpack-backups\\before-kino-streak-overlay-fix-20261011-012001",
+  "sha256": "bc4c9ed4ce265c8466ba6f68230e26478db5bc70c6fea7d26e44f29446706951",
+  "settings_preserved": true,
+  "iris_config_modified": false,
+  "current_shaderpack": "rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "size_bytes": 8315590,
+  "fix": "Iris BooleanOption discovery allocates both streak atlases; wrong-size sampler/image fallback guarded."
+}

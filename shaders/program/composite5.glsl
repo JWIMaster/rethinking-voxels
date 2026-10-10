@@ -105,6 +105,10 @@ void DoBSLColorSaturation(inout vec3 color) {
     #include "/lib/misc/lensFlare.glsl"
 #endif
 
+#if defined KINO_STREAK && STREAK_INTENSITY > 0
+    #include "/lib/misc/kinoStreakComposite.glsl"
+#endif
+
 //Program//
 void main() {
     vec3 color = texture2D(colortex0, texCoord).rgb;
@@ -139,6 +143,10 @@ void main() {
 
     #ifdef BLOOM
         DoBloom(color, texCoord, dither, lViewPos);
+    #endif
+
+    #if defined KINO_STREAK && STREAK_INTENSITY > 0
+        color += GetKinoStreak(texCoord, textureSize(colortex0, 0));
     #endif
 
     #ifdef COLORGRADING

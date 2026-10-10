@@ -664,6 +664,36 @@ option.TEXTURE_RES=Fallback Resolution
 option.TEXTURE_RES.comment=Texture resolution that will be used where pixelated effects are calculated without having texture coordinates, such as blocklight.
 suffix.TEXTURE_RES=/Block
 
+screen.STREAK_SETTINGS=KinoStreak / Anamorphic Streaks
+screen.STREAK_SETTINGS.comment=Horizontal lens streaks from bright HDR highlights, adapted from KinoStreak by Keijiro Takahashi. Independent of ordinary Bloom; applies before tone mapping and barrel distortion.
+option.KINO_STREAK=Anamorphic Streaks
+option.KINO_STREAK.comment=Enables horizontal flares on bright world objects in all dimensions. Sky sources are excluded. Generated before World Blur so chromatic blur does not offset the streak source. Disable to remove filtering and atlas allocations.
+option.STREAK_COLOR_MODE=Flare Color Mode
+option.STREAK_COLOR_MODE.comment=Current / Custom Tint keeps the existing source colors multiplied by the RGB tint sliders. Classic Blue uses a fixed cool-blue lens-flare tint regardless of the source light color; RGB tint sliders apply only in Current mode. Both modes keep the same threshold, stretch and intensity.
+value.STREAK_COLOR_MODE.0=Current / Custom Tint
+value.STREAK_COLOR_MODE.1=Classic Blue
+option.STREAK_THRESHOLD=Streak Brightness Threshold
+option.STREAK_THRESHOLD.comment=Minimum linear HDR brightness required to produce streaks. Raise this to restrict streaks to the brightest lights; lower it for more streak sources.
+option.STREAK_STRETCH=Streak Stretch
+option.STREAK_STRETCH.comment=Blends toward wider horizontal pyramid levels. Higher values produce longer streaks; zero keeps only the narrowest level.
+option.STREAK_INTENSITY=Streak Intensity
+value.STREAK_INTENSITY.0=OFF
+value.STREAK_INTENSITY.5=5%
+value.STREAK_INTENSITY.10=10%
+value.STREAK_INTENSITY.15=15%
+value.STREAK_INTENSITY.20=20%
+value.STREAK_INTENSITY.25=25%
+value.STREAK_INTENSITY.30=30%
+value.STREAK_INTENSITY.40=40%
+value.STREAK_INTENSITY.50=50%
+value.STREAK_INTENSITY.60=60%
+value.STREAK_INTENSITY.75=75%
+value.STREAK_INTENSITY.100=100%
+option.STREAK_INTENSITY.comment=Strength of the additive streak glow. Zero disables streak filtering and its image allocations.
+option.STREAK_TINT_R=Streak Tint: Red
+option.STREAK_TINT_G=Streak Tint: Green
+option.STREAK_TINT_B=Streak Tint: Blue
+
 option.BLOOM=Bloom
 option.BLOOM.comment=Enables blurry glow from bright objects and humidity.
 
@@ -770,6 +800,18 @@ value.CHROMA_ABERRATION.5=5 §c[-]
 value.CHROMA_ABERRATION.6=6 §c[-]
 value.CHROMA_ABERRATION.7=7 §c[-]
 value.CHROMA_ABERRATION.8=8 §c[-]
+
+option.BARREL_DISTORTION=Barrel Distortion
+option.BARREL_DISTORTION.comment=Applies post process barrel distortion to the final image, which bends the image outwards around the center of the screen. §e[*]§r Meant for emulating the curvature of an anamorphic lens; higher values distort more, and the image is zoomed in slightly so that the distortion doesn't expose the edges of the screen.
+value.BARREL_DISTORTION.0=§cOFF
+value.BARREL_DISTORTION.20=20 §c[-]
+value.BARREL_DISTORTION.35=35 §c[-]
+value.BARREL_DISTORTION.50=50 §c[-]
+
+option.BARREL_DISTORTION_MODE=Barrel Distortion Mode
+option.BARREL_DISTORTION_MODE.comment=Circular: Distorts the image evenly in all directions. Anamorphic: Distorts the image twice as much horizontally as vertically, like the asymmetric curvature of an anamorphic lens.
+value.BARREL_DISTORTION_MODE.0=Circular
+value.BARREL_DISTORTION_MODE.1=Anamorphic
 
 option.IPBR_EMISSIVE_MODE=IPBR+ Emissive Mode
 option.IPBR_EMISSIVE_MODE.comment=Determines the handling of emissives within IntegratedPBR+. Choosing the labPBR or seuspbr options allow compatible resource packs to completely override IPBR+ emissives on blocks that have specular textures attached to them. §c[-]§r It's not recommended to change this setting unless you know what you are doing.

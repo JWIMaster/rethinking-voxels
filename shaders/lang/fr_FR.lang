@@ -574,6 +574,36 @@ value.PIXEL_SHADOW.32=32x32 §e[*]
 value.PIXEL_SHADOW.64=64x64 §e[*]
 value.PIXEL_SHADOW.128=128x128 §e[*]
 
+screen.STREAK_SETTINGS=KinoStreak / Traînées anamorphiques
+screen.STREAK_SETTINGS.comment=Traînées lumineuses horizontales adaptées de KinoStreak par Keijiro Takahashi. Indépendantes du Bloom, appliquées avant le tone mapping et la distorsion en barillet.
+option.KINO_STREAK=Traînées anamorphiques
+option.KINO_STREAK.comment=Active des traînées horizontales sur les objets lumineux du monde, sans le ciel. Générées avant le flou du monde pour éviter le décalage chromatique. Désactivez pour supprimer le filtrage et les images supplémentaires.
+option.STREAK_COLOR_MODE=Mode de couleur des traînées
+option.STREAK_COLOR_MODE.comment=Actuel / Teinte personnalisée conserve les couleurs de la source avec les réglages RVB. Bleu classique impose une teinte bleue, quelle que soit la couleur de la lumière. Les réglages RVB ne s'appliquent qu'au mode Actuel. Seuil, étirement et intensité restent inchangés.
+value.STREAK_COLOR_MODE.0=Actuel / Teinte personnalisée
+value.STREAK_COLOR_MODE.1=Bleu classique
+option.STREAK_THRESHOLD=Seuil de luminosité des traînées
+option.STREAK_THRESHOLD.comment=Luminosité HDR linéaire minimale. Augmentez pour limiter les traînées aux lumières les plus fortes.
+option.STREAK_STRETCH=Étirement des traînées
+option.STREAK_STRETCH.comment=Les valeurs élevées produisent des traînées plus longues. Zéro conserve seulement le niveau le plus étroit.
+option.STREAK_INTENSITY=Intensité des traînées
+value.STREAK_INTENSITY.0=Non
+value.STREAK_INTENSITY.5=5%
+value.STREAK_INTENSITY.10=10%
+value.STREAK_INTENSITY.15=15%
+value.STREAK_INTENSITY.20=20%
+value.STREAK_INTENSITY.25=25%
+value.STREAK_INTENSITY.30=30%
+value.STREAK_INTENSITY.40=40%
+value.STREAK_INTENSITY.50=50%
+value.STREAK_INTENSITY.60=60%
+value.STREAK_INTENSITY.75=75%
+value.STREAK_INTENSITY.100=100%
+option.STREAK_INTENSITY.comment=Intensité de la lueur additive. Zéro désactive le filtrage et les images supplémentaires.
+option.STREAK_TINT_R=Teinte des traînées : Rouge
+option.STREAK_TINT_G=Teinte des traînées : Vert
+option.STREAK_TINT_B=Teinte des traînées : Bleu
+
 option.BLOOM=Bloom
 option.BLOOM.comment=Active le flou lumineux à partir d'objets lumineux et de l'humidité.
 
@@ -668,6 +698,18 @@ value.CHROMA_ABERRATION.5=5 §c[-]
 value.CHROMA_ABERRATION.6=6 §c[-]
 value.CHROMA_ABERRATION.7=7 §c[-]
 value.CHROMA_ABERRATION.8=8 §c[-]
+
+option.BARREL_DISTORTION=Distorsion en barillet
+option.BARREL_DISTORTION.comment=Applique une distorsion en barillet à l'image finale, ce qui courbe l'image vers l'extérieur autour du centre de l'écran. §e[*]§r Destinée à imiter la courbure d'un objectif anamorphique ; plus la valeur est élevée, plus la distorsion est forte, et l'image est légèrement zoomée pour que la distorsion ne laisse pas apparaître les bords de l'écran.
+value.BARREL_DISTORTION.0=§cNon
+value.BARREL_DISTORTION.20=20 §c[-]
+value.BARREL_DISTORTION.35=35 §c[-]
+value.BARREL_DISTORTION.50=50 §c[-]
+
+option.BARREL_DISTORTION_MODE=Mode de distorsion en barillet
+option.BARREL_DISTORTION_MODE.comment=Circulaire : Déforme l'image de façon uniforme dans toutes les directions. Anamorphique : Déforme l'image deux fois plus horizontalement que verticalement, comme la courbure asymétrique d'un objectif anamorphique.
+value.BARREL_DISTORTION_MODE.0=Circulaire
+value.BARREL_DISTORTION_MODE.1=Anamorphique
 
 option.FANCY_GLASS=Verre amélioré
 option.FANCY_GLASS.comment=Améliore le verre ordinaire en lui ajoutant une couche translucide. §c[-]§r Peut causer des problèmes sur Iris en raison d'un bug de Sodium. §e[*]§r L'option RP Support doit être réglée sur PBR+ Intégré

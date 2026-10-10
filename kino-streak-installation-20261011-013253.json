@@ -1,0 +1,14 @@
+{
+  "export": "C:\\Users\\jwalr\\rethinking-voxels\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "installed": [
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion.zip",
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip"
+  ],
+  "backup": "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\shaderpack-backups\\before-kino-streak-sky-blur-fix-20261011-013253",
+  "sha256": "102192ac986da9357e744380c0c0740e8b0baea225241b6e902701dfa1885b65",
+  "size_bytes": 8316759,
+  "settings_preserved": true,
+  "iris_config_modified": false,
+  "current_shaderpack": "rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "fix": "Reject sky source texels before interpolation; generate streaks before composite3 world blur and chromatic offsets, while preserving final composite5 and user blur settings."
+}

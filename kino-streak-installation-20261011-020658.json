@@ -1,0 +1,14 @@
+{
+  "export": "C:\\Users\\jwalr\\rethinking-voxels\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "installed": [
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion.zip",
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip"
+  ],
+  "backup": "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\shaderpack-backups\\before-kino-streak-color-mode-20261011-020658",
+  "sha256": "8a80d70601e45f796a7b6a8480079d4e185daa190af4371de1acc1d7e2d44bf9",
+  "size_bytes": 8317587,
+  "settings_preserved": true,
+  "iris_config_modified": false,
+  "current_shaderpack": "rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "fix": "Add Flare Color Mode: Current / Custom Tint (default) or fixed Classic Blue, preserving sky rejection, pre-world-blur generation and all existing user settings."
+}

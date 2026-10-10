@@ -72,12 +72,20 @@ noperspective in vec2 texCoord;
     }
 #endif
 
+#if BARREL_DISTORTION > 0
+    #include "/lib/misc/lensDistortion.glsl"
+#endif
+
 #define WRITE_TO_SSBOS
 #include "/lib/vx/SSBOs.glsl"
 
 //Program//
 void main() {
     vec2 texCoordM = texCoord;
+
+    #if BARREL_DISTORTION > 0
+        texCoordM = GetBarrelDistortedTexCoord(texCoordM);
+    #endif
 
     #ifdef UNDERWATER_DISTORTION
         if (isEyeInWater == 1)
