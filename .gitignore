@@ -1,3 +1,5 @@
 *.zip
 tools/.test-cache/
 tools/__pycache__/
+kino-streak-installation-*.json
+rollback-to-streak-release-*.json
