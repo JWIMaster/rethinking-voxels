@@ -1,4 +1,5 @@
 #include "/lib/common.glsl"
+#include "/lib/vx/voxelHistory.glsl"
 
 //////Fragment Shader//////Fragment Shader//////
 #ifdef FRAGMENT_SHADER
@@ -19,38 +20,32 @@ layout(r32ui) uniform restrict readonly uimage2D colorimg9;
 #include "/lib/vx/SSBOs.glsl"
 
 void main() {
-    ivec2 texelCoord = ivec2(gl_FragCoord.xy);
-    float prevDepth = texelFetch(colortex1, texelCoord, 0).r;
-    vec4 prevClipPos = vec4(gl_FragCoord.xy / view, prevDepth, 1) * 2 - 1;
-    vec4 newClipPos = prevClipPos;
-    if (prevDepth > 0.56) {
-        newClipPos = unprojectionMatrix * prevClipPos;
-        newClipPos.xyz += newClipPos.w * (previousCameraPosition - cameraPosition);
-        if (abs(texelFetch(colortex1, texelCoord, 0).y - OSIEBCA * 254.0) < 0.5 * OSIEBCA) {
-            vec3 velocity = texelFetch(colortex10, texelCoord, 0).rgb;
-            newClipPos.xyz += newClipPos.w * velocity;
-        }
-        newClipPos = projectionMatrix * newClipPos;
-        newClipPos /= newClipPos.w;
-    }
-    newClipPos = 0.5 * newClipPos + 0.5;
-    if (prevClipPos.z > 0.99998) newClipPos.z = 0.9999985;
-    if (all(greaterThan(newClipPos.xyz, vec3(0))) && all(lessThan(newClipPos.xyz, vec3(0.999999)))) {
-        newClipPos.xy *= view;
-        vec2 diff = newClipPos.xy - gl_FragCoord.xy + 0.01;
-        ivec2 writePixelCoord = ivec2(gl_FragCoord.xy + floor(diff));
-        uint depth = uint((1<<30) * newClipPos.z);
-        if (imageLoad(colorimg9, writePixelCoord).r == depth) {
-            vec2 prevSampleCoord = (gl_FragCoord.xy - fract(diff)) / view;
-            vec4 writeData = vec4(newClipPos.z < 0.999998 ? texture(colortex4, prevSampleCoord).gba * 2 - 1 : vec3(0), 1 - newClipPos.z);
-            #ifdef BLOCKLIGHT_HIGHLIGHT
-                vec4 materialData = texture(colortex6, prevSampleCoord);
-                imageStore(colorimg3, writePixelCoord, materialData);
-            #endif
-            imageStore(colorimg8, writePixelCoord, writeData);
-            
-        }
-    }
+    if (!VoxelHistoryValid()) discard;
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    uint encodedDepth = imageLoad(colorimg9, p).r;
+    if (encodedDepth >= (1u << 30)) discard;
+    float newDepth = float(encodedDepth) / float(1u << 30);
+    vec4 oldClip = vec4(gl_FragCoord.xy / view, newDepth, 1);
+    if (newDepth > 0.56) {
+        vec4 currentClip = oldClip * 2 - 1;
+        currentClip.w = 1.0;
+        vec4 player = gbufferModelViewInverse * (gbufferProjectionInverse * currentClip);
+        if (player.w <= 1e-8 || any(isnan(player)) || any(isinf(player))) discard;
+        player.xyz += player.w * (cameraPosition - previousCameraPosition);
+        oldClip = gbufferPreviousProjection * (gbufferPreviousModelView * player);
+        if (oldClip.w <= 1e-8 || any(isnan(oldClip)) || any(isinf(oldClip))) discard;
+        oldClip = oldClip / oldClip.w * 0.5 + 0.5;
+    } // Hand/viewmodel depth deliberately stays in the same screen pixels.
+    vec2 halfTexel = 0.5 / view;
+    if (any(lessThan(oldClip.xy, halfTexel)) || any(greaterThan(oldClip.xy, 1 - halfTexel))) discard;
+    // Each destination has one writer even when many old pixels shared the
+    // same quantized nearest depth. No equality-tie scatter race remains.
+    vec3 normal = newDepth < 0.999998 ? texture(colortex4, oldClip.xy).gba * 2 - 1 : vec3(0);
+    if (any(isnan(normal)) || any(isinf(normal))) discard;
+    imageStore(colorimg8, p, vec4(normal, 1 - newDepth));
+    #ifdef BLOCKLIGHT_HIGHLIGHT
+        imageStore(colorimg3, p, texture(colortex6, oldClip.xy));
+    #endif
     /*DRAWBUFFERS:3*/
     discard;
 }

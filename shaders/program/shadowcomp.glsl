@@ -1,4 +1,6 @@
 #include "/lib/common.glsl"
+#include "/lib/vx/voxelHistory.glsl"
+#include "/lib/vx/lightData.glsl"
 
 #ifdef CSH
 #if VX_VOL_SIZE == 0
@@ -38,10 +40,15 @@ shared float fullDist[10][10][10];
 shared uint isActive;
 
 #include "/lib/vx/positionHashing.glsl"
-#define WRITE_TO_SSBOS
-#include "/lib/vx/SSBOs.glsl"
+
 
 const float levelFadeDist = 2.0;
+float ReadPreviousDistance(ivec3 coord, int level) {
+    if (!VoxelHistoryValid() || !VoxelHistoryCoordValid(coord)) return 0.0;
+    ivec3 bank = ivec3(0, (frameCounter % 2 * 2 + level / 4) * voxelVolumeSize.y, 0);
+    float distance = imageLoad(distanceFieldI, coord + bank)[level % 4];
+    return isnan(distance) || isinf(distance) ? 0.0 : distance;
+}
 
 void main() {
     ivec3 baseCoord = ivec3(gl_WorkGroupID) * 8;
@@ -103,14 +110,17 @@ void main() {
         imageLoad(voxelCols, texCoord * ivec3(1, 2, 1) + ivec3(0, 1, 0)).r
     );
     int dataBits = rawCol.x >> 26 << 26;
-    if ((rawCol.g >> 23) == 0) {
+    if ((rawCol.r & (1 << 28)) == 0 && (rawCol.g >> 23) == 0) {
         for (int k = 0; k < 6; k++) {
             ivec3 offset = (k/3*2-1) * ivec3(equal(ivec3(k%3), ivec3(0, 1, 2)));
+            if (!VoxelHistoryCoordValid(texCoord + offset)) continue;
             ivec2 otherRawCol = ivec2(
                 imageLoad(voxelCols, (texCoord + offset) * ivec3(1, 2, 1)).r,
                 imageLoad(voxelCols, (texCoord + offset) * ivec3(1, 2, 1) + ivec3(0, 1, 0)).r
             );
-            if ((otherRawCol.g >> 23) > (rawCol.g >> 23)) {
+            // Only original geometry can donate: previously extended air must
+            // not recursively propagate in an execution-order-dependent way.
+            if ((otherRawCol.r & (1 << 28)) != 0 && (otherRawCol.g >> 23) > (rawCol.g >> 23)) {
                 rawCol = otherRawCol;
                 rawCol.g &= ~(0x3ff << 13);
             }
@@ -123,9 +133,7 @@ void main() {
         }
     }
     if ((thisOccupancy >> 16 & 1) != 0) {
-        uint hash0 = posToHash(texCoord - voxelVolumeSize/2) % uint(1<<18);
-        globalLightHashMap[hash0*4+3] |= 0xffff0000u;
-        globalLightHashMap[hash0*4+3] &= (16 + (16 << 5) + (16 << 10)) << 16 | 0xffffu;
+        updateVoxelLightTag(texCoord, (uint(16 + (16 << 5) + (16 << 10)) << 16) | 0xffffu, 0xffff0000u);
     }
 }
 #endif
@@ -147,135 +155,83 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 layout(r32i) uniform restrict iimage3D occupancyVolume;
 
 #include "/lib/vx/positionHashing.glsl"
-#define WRITE_TO_SSBOS
-#include "/lib/vx/SSBOs.glsl"
-shared int lights[512];
-shared int lightCount;
-shared ivec4 lightLocs[512];
+
+// One globally defined owner per complete component. No thread clears
+// membership while another discovers it; oversized components remain original.
+uint EntityCoordKey(ivec3 p) {
+    return uint(p.x + voxelVolumeSize.x * (p.y + voxelVolumeSize.y * p.z));
+}
+void ClumpEntityComponent(ivec3 source) {
+    if (!VoxelHistoryCoordValid(source)) return;
+    int sourceBits = imageLoad(occupancyVolume, source).r;
+    if ((sourceBits & (1 << 27)) == 0 || (sourceBits & (1 << 16)) == 0) return;
+    int lightClass = sourceBits >> 22 & 63;
+    uint ownerKey = EntityCoordKey(source);
+    // Most non-root voxels can be rejected without a component traversal.
+    for (int n = 0; n < 6; ++n) {
+        ivec3 d = (n / 3 * 2 - 1) * ivec3(n % 3 == 0, n % 3 == 1, n % 3 == 2);
+        ivec3 q = source + d;
+        if (VoxelHistoryCoordValid(q) && (imageLoad(occupancyVolume, q).r >> 22 & 63) == lightClass && EntityCoordKey(q) < ownerKey) return;
+    }
+    const int MAX_CLUMP_SIZE = 128;
+    ivec3 nodes[MAX_CLUMP_SIZE];
+    nodes[0] = source;
+    int count = 1;
+    bool complete = true;
+    int maxLightLevel = sourceBits >> 17 & 31;
+    for (int j = 0; j < count; ++j) {
+        for (int n = 0; n < 6; ++n) {
+            ivec3 d = (n / 3 * 2 - 1) * ivec3(n % 3 == 0, n % 3 == 1, n % 3 == 2);
+            ivec3 q = nodes[j] + d;
+            if (!VoxelHistoryCoordValid(q)) continue;
+            int bits = imageLoad(occupancyVolume, q).r;
+            if ((bits >> 22 & 63) != lightClass) continue;
+            bool known = false;
+            for (int k = 0; k < count; ++k) if (nodes[k] == q) { known = true; break; }
+            if (known) continue;
+            if (count == MAX_CLUMP_SIZE) { complete = false; continue; }
+            nodes[count++] = q;
+            ownerKey = min(ownerKey, EntityCoordKey(q));
+            maxLightLevel = max(maxLightLevel, bits >> 17 & 31);
+        }
+    }
+    if (!complete || ownerKey != EntityCoordKey(source)) return;
+    ivec4 meanPos = ivec4(0);
+    ivec3 meanCol = ivec3(0);
+    for (int k = 0; k < count; ++k) {
+        uvec4 data = loadVoxelLightData(nodes[k]);
+        ivec4 pos = ivec4(data.x & 0xffffu, data.x >> 16, data.y & 0xffffu, data.y >> 16);
+        if (pos.w == 0) return;
+        meanPos += pos + ivec4(nodes[k] - source, 0) * 32 * pos.w;
+        meanCol += ivec3(data.z & 0xffffu, data.z >> 16, data.w & 0xffffu);
+    }
+    if (meanPos.w <= 0) return;
+    meanCol /= meanPos.w;
+    meanPos /= meanPos.w;
+    vec3 probePos = source + meanPos.xyz / 32.0 - vec3(0.991775521, 1.0061213, 1.000062142);
+    float minLen = 1000000.0;
+    int bestFit = 0;
+    for (int k = 0; k < count; ++k) {
+        float distance = length(probePos - nodes[k]);
+        if (distance < minLen || (distance == minLen && EntityCoordKey(nodes[k]) < EntityCoordKey(nodes[bestFit]))) {
+            minLen = distance; bestFit = k;
+        }
+    }
+    ivec3 outputCoord = nodes[bestFit];
+    meanPos.xyz += 32 * (source - outputCoord);
+    uvec4 outputData = uvec4(uint(meanPos.x) | uint(meanPos.y) << 16,
+        uint(meanPos.z) | 1u << 16, uint(meanCol.x) | uint(meanCol.y) << 16,
+        uint(meanCol.z) | 0xffff0000u);
+    for (int k = 0; k < count; ++k) imageAtomicAnd(occupancyVolume, nodes[k], ~(1 << 16));
+    // Preserve geometry, translucency, material, entity and sky flags.
+    imageAtomicAnd(occupancyVolume, outputCoord, ~(63 << 16));
+    imageAtomicOr(occupancyVolume, outputCoord, (1 + (maxLightLevel << 1)) << 16);
+    storeVoxelLightData(outputCoord, outputData);
+}
 void main() {
-    int index = int(gl_LocalInvocationID.x) + 8 * int(gl_LocalInvocationID.y) + 64 * int(gl_LocalInvocationID.z);
-    if (index == 0) {
-        lightCount = 0;
-    }
-    barrier();
-    memoryBarrierShared();
-    for (int k = 0; k < 64; k++) {
-        ivec3 offset = ivec3(k%4, k/4%4, k/16%4);
-        ivec3 coord = ivec3(gl_GlobalInvocationID) * 4 + 3 + offset;
-        int thisOccupancy = imageLoad(occupancyVolume, coord).r;
-        if ((thisOccupancy >> 27 & 1) == 1) {
-            int lightIndex = atomicAdd(lightCount, 1);
-            if (lightIndex < 512) {
-                lightLocs[lightIndex] = ivec4(coord, thisOccupancy >> 22 & 31);
-                lights[lightIndex] = 0;
-            } else {
-                atomicMin(lightCount, 512);
-            }
-        }
-    }
-    barrier();
-    memoryBarrierShared();
-    int aroundLightCount = 1;
-    for (int k = index + 1; k < lightCount; k++) {
-        if (length(lightLocs[k] - lightLocs[index]) < 1.1) {
-            for (int l = index + 1; l < k; l++) {
-                if (length(lightLocs[l] - lightLocs[k]) < 1.1) {
-                    atomicExchange(lights[l], -1);
-                }
-            }
-            atomicExchange(lights[k], -1);
-        }
-    }
-    barrier();
-    memoryBarrierShared();
-    bool restoreEmissiveness = false;
-    ivec3 coord;
-    uvec4 packedLightDataToWrite;
-    int maxLightLevel = 0;
-    #define MAX_CLUMP_SIZE 128
-    if (index < lightCount) {
-        coord = lightLocs[index].xyz;
-        imageAtomicAnd(occupancyVolume, coord, ~(1<<16));
-        if (lights[index] == 0) {
-            int thisOccupancy = imageLoad(occupancyVolume, coord).r;
-            int linkedLightCount = 1;
-            ivec3 linkedLights[MAX_CLUMP_SIZE];
-            linkedLights[0] = coord;
-            for (int j = 0; j < min(MAX_CLUMP_SIZE, linkedLightCount); j++) {
-                if (linkedLightCount >= MAX_CLUMP_SIZE) break;
-                for (int i = 0; i < 6; i++) {
-                    ivec3 offset = (i/3*2-1)*ivec3(equal(ivec3(i%3), ivec3(0, 1, 2)));
-                    ivec3 thisLight = linkedLights[j] + offset;
-                    int aroundOccupancy = imageLoad(occupancyVolume, thisLight).r;
-                    if ((aroundOccupancy >> 22 & 63) != (thisOccupancy >> 22 & 63)) continue;
-                    bool known = false;
-                    for (int n = 0; n < min(MAX_CLUMP_SIZE, linkedLightCount); n++) {
-                        if (linkedLights[n] == thisLight) {
-                            known = true;
-                            break;
-                        }
-                    }
-                    if (known || linkedLightCount >= MAX_CLUMP_SIZE) {
-                        continue;
-                    }
-                    linkedLights[linkedLightCount++] = thisLight;
-                    maxLightLevel = max(maxLightLevel, aroundOccupancy >> 17 & 31);
-                }
-            }
-            ivec4 meanPos = ivec4(0);
-            ivec3 meanCol = ivec3(0);
-            for (int k = 0; k < linkedLightCount; k++) {
-                restoreEmissiveness = true;
-                ivec3 otherLightCoord = linkedLights[k];
-                uint hash = posToHash(otherLightCoord - voxelVolumeSize/2) % uint(1<<18);
-                uvec4 packedLightData = uvec4(
-                    globalLightHashMap[4 * hash],
-                    globalLightHashMap[4 * hash + 1],
-                    globalLightHashMap[4 * hash + 2],
-                    globalLightHashMap[4 * hash + 3]
-                );
-                ivec4 otherPos = ivec4(packedLightData.x & 0xffffu, packedLightData.x >> 16, packedLightData.y & 0xffffu, packedLightData.y >> 16);
-                ivec4 otherCol = ivec4(packedLightData.z & 0xffffu, packedLightData.z >> 16, packedLightData.w & 0xffffu, packedLightData.w >> 16);
-                ivec4 offset = ivec4(otherLightCoord - coord, 0);
-                meanPos += otherPos + offset * 32 * otherPos.w;
-                meanCol += otherCol.xyz;
-                if (otherCol.w == 0xffff) {
-                    restoreEmissiveness = false;
-                    break;
-                }
-            }
-            if (restoreEmissiveness) {
-                meanCol /= meanPos.w;
-                meanPos /= meanPos.w;
-                vec3 probePos = coord + meanPos.xyz/32.0 - vec3(0.991775521, 1.0061213, 1.000062142);
-                float minLen = 1000000.0;
-                int bestFitIndex = 0;
-                for (int k = 0; k < linkedLightCount; k++) {
-                    float thisLen = length(probePos - linkedLights[k]);
-                    if (thisLen < minLen) {
-                        bestFitIndex = k;
-                        minLen = thisLen;
-                    }
-                }
-                meanPos.xyz += 32 * (coord - linkedLights[bestFitIndex]);
-                coord = linkedLights[bestFitIndex];
-                packedLightDataToWrite = uvec4(
-                    uint(meanPos.x) | uint(meanPos.y) << 16,
-                    uint(meanPos.z) | uint(1) << 16,
-                    uint(meanCol.x) | uint(meanCol.y) << 16,
-                    uint(meanCol.z) | 0xffff0000u
-                );
-            }
-        }
-    }
-    barrier();
-    if (restoreEmissiveness) {
-        imageAtomicAnd(occupancyVolume, coord, 63<<16);
-        imageAtomicOr(occupancyVolume, coord, (1 + (maxLightLevel << 1)) << 16);
-        uint hash = posToHash(coord - voxelVolumeSize/2) % uint(1<<18);
-        for (int k = 3; k >= 0; k--) {
-            atomicExchange(globalLightHashMap[4 * hash + k], packedLightDataToWrite[k]);
-        }
+    for (int k = 0; k < 64; ++k) {
+        ivec3 offset = ivec3(k % 4, k / 4 % 4, k / 16 % 4);
+        ClumpEntityComponent(ivec3(gl_GlobalInvocationID) * 4 + 3 + offset);
     }
 }
 #endif
@@ -300,8 +256,7 @@ layout(r32i) uniform restrict iimage3D occupancyVolume;
 uniform vec3 cameraPosition;
 
 #include "/lib/vx/positionHashing.glsl"
-#define WRITE_TO_SSBOS
-#include "/lib/vx/SSBOs.glsl"
+
 shared ivec3 lightCs[512];
 shared int lightCount;
 shared ivec4 lightLocs[8][8][8];
@@ -316,32 +271,26 @@ void main() {
     lightCols[c.x][c.y][c.z] = ivec3(0);
     barrier();
     memoryBarrierShared();
-    ivec3 coord = ivec3(gl_GlobalInvocationID) + ivec3(mod(cameraPosition, vec3(2)));
+    ivec3 coord = ivec3(gl_GlobalInvocationID) + ((cameraPositionInt.y == -98257195 ? ivec3(floor(cameraPosition)) : cameraPositionInt) % 2 + 2) % 2;
     int thisOccupancyData0 = imageLoad(occupancyVolume, coord).r;
     if ((thisOccupancyData0 >> 16 & 1) != 0 && (thisOccupancyData0 >> 27 & 1) == 0) {
         lightCs[atomicAdd(lightCount, 1)] = c;
     }
     barrier();
     memoryBarrierShared();
-    uint hash = 0xffffffffu;
+
     bool spreadDown = false;
     if (index < lightCount) {
         c = lightCs[index];
-        coord = c + 8 * ivec3(gl_WorkGroupID) + ivec3(mod(cameraPosition, vec3(2)));
+        coord = c + 8 * ivec3(gl_WorkGroupID) + ((cameraPositionInt.y == -98257195 ? ivec3(floor(cameraPosition)) : cameraPositionInt) % 2 + 2) % 2;
         ivec3 lightLoc0 = coord - voxelVolumeSize/2;
-        hash = posToHash(lightLoc0) % uint(1<<18);
         int thisOccupancy = imageLoad(occupancyVolume, coord).r;
-        uvec2 packedLightSubPos = uvec2(
-            globalLightHashMap[4 * hash],
-            globalLightHashMap[4 * hash + 1]
-        );
-        uvec2 packedLightCol = uvec2(
-            globalLightHashMap[4 * hash + 2],
-            globalLightHashMap[4 * hash + 3]
-        );
+        uvec4 lightData = loadVoxelLightData(coord);
+        uvec2 packedLightSubPos = lightData.xy;
+        uvec2 packedLightCol = lightData.zw;
         ivec4 subPos = ivec4(packedLightSubPos.x & 0xffffu, packedLightSubPos.x >> 16, packedLightSubPos.y & 0xffffu, packedLightSubPos.y >> 16);
         ivec4 col = ivec4(packedLightCol.x & 0xffffu, packedLightCol.x >> 16, packedLightCol.y & 0xffffu, packedLightCol.y >> 16);
-        ivec3 downRange = coord - (coord + ivec3(mod(cameraPosition, vec3(2))))%2;
+        ivec3 downRange = coord - (coord + ((cameraPositionInt.y == -98257195 ? ivec3(floor(cameraPosition)) : cameraPositionInt) % 2 + 2) % 2)%2;
         for (int k = 0; k < 4; k++) {
             atomicAdd(lightLocs[c.x][c.y][c.z][k], subPos[k]);
         }
@@ -409,9 +358,7 @@ void main() {
                 uint(lightCols[c.x][c.y][c.z].x) | uint(lightCols[c.x][c.y][c.z].y) << 16,
                 uint(lightCols[c.x][c.y][c.z].z)
             );
-            for (int k = 0; k < 4; k++) {
-                globalLightHashMap[4 * hash + k] = packedLightData[k];
-            }
+            storeVoxelLightData(coord, packedLightData);
         }
     }
 }

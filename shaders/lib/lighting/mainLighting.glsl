@@ -22,6 +22,7 @@ vec3 fractCamPos = cameraPositionInt.y == -98257195 ? fract(cameraPosition) : ca
 
 #if defined PER_PIXEL_LIGHT && !defined GBUFFERS_WATER
     #include "/lib/util/random.glsl"
+    #include "/lib/lighting/voxelHistoryConfidence.glsl"
     uniform sampler2D colortex12;
     #ifdef BLOCKLIGHT_HIGHLIGHT
         uniform sampler2D colortex14;
@@ -479,32 +480,48 @@ void DoLighting(inout vec4 color, inout vec3 shadowMult, vec3 playerPos, vec3 vi
     #endif
 
     // Voxel-based Lighting
-    vec4 compareNormalDepthData = vec4(worldNormalM, 60 * (1.0 - gl_FragCoord.z));
     vec3 voxelBlockLighting = vec3(0.0);
-    vec2 blocklightReadCoord = gl_FragCoord.xy;
     #if defined PER_PIXEL_LIGHT && !defined GBUFFERS_WATER
-        bool foundValidLoc = false;
+        vec2 blocklightReadCoord = gl_FragCoord.xy;
+        float blocklightConfidence = 0.0;
+        vec3 weightedPixelLighting = vec3(0.0);
+        float pixelWeightSum = 0.0;
         float angleDither = nextFloat();
         for (int k = 0; k < 10; k++) {
-            blocklightReadCoord = gl_FragCoord.xy + k * sqrt(float(k)) * vec2(
+            vec2 pixelOffset = k * sqrt(float(k)) * vec2(
                 cos(2.0/1.618*3.1416*(k + angleDither)),
                 sin(2.0/1.618*3.1416*(k + angleDither)));
-
-            vec4 normalDepthData = texelFetch(colortex8, ivec2(blocklightReadCoord), 0);
-            normalDepthData.w *= 60;
-            if (length(normalDepthData - compareNormalDepthData) < 0.3) {
-                voxelBlockLighting = 4.0 * texelFetch(colortex12, ivec2(blocklightReadCoord), 0).rgb;
-                //color.rgb = vec3(1);
-                //voxelBlockLighting = 4 * vec3(normalize(blocklightReadCoord - gl_FragCoord.xy) * 0.5 + 0.5, 0);
-                foundValidLoc = true;
-                break;
+            vec2 sampleCoord = gl_FragCoord.xy + pixelOffset;
+            // Test floating coordinates first: ivec2(-0.5) truncates to zero.
+            if (any(lessThan(sampleCoord, vec2(0.0))) ||
+                any(greaterThanEqual(sampleCoord, vec2(textureSize(colortex8, 0)))) ||
+                any(greaterThanEqual(sampleCoord, vec2(textureSize(colortex12, 0))))) continue;
+            ivec2 pixelCoord = ivec2(sampleCoord);
+            vec4 normalDepthData = texelFetch(colortex8, pixelCoord, 0);
+            float confidence = voxelHistoryConfidence(worldNormalM, gl_FragCoord.z, normalDepthData, near, far);
+            confidence *= voxelHistorySpatialWeight(pixelOffset);
+            if (confidence <= 0.0) continue;
+            vec3 pixelLighting = 4.0 * texelFetch(colortex12, pixelCoord, 0).rgb;
+            if (any(isnan(pixelLighting)) || any(isinf(pixelLighting))) continue;
+            weightedPixelLighting += confidence * pixelLighting;
+            pixelWeightSum += confidence;
+            if (confidence > blocklightConfidence) {
+                blocklightConfidence = confidence;
+                blocklightReadCoord = sampleCoord;
             }
+            if (k == 0 && confidence >= 1.0) break;
         }
-        if (!foundValidLoc) {
-        #endif
+        if (pixelWeightSum > 0.0) {
+            vec3 pixelLighting = weightedPixelLighting / pixelWeightSum;
+            // Keep exact center matches bit-for-bit on the original PPL path.
+            // Lesser confidence fades to the cache rather than switching quality.
+            voxelBlockLighting = blocklightConfidence >= 1.0 ? pixelLighting :
+                mix(4.0 * readSurfaceVoxelBlocklight(vxPos, worldNormalM), pixelLighting, blocklightConfidence);
+        } else {
+            voxelBlockLighting = 4.0 * readSurfaceVoxelBlocklight(vxPos, worldNormalM);
+        }
+    #else
         voxelBlockLighting = 4.0 * readSurfaceVoxelBlocklight(vxPos, worldNormalM);
-        #if defined PER_PIXEL_LIGHT && !defined GBUFFERS_WATER
-        }
     #endif
     #ifdef GI
         #ifndef GBUFFERS_WATER
@@ -623,10 +640,13 @@ void DoLighting(inout vec4 color, inout vec3 shadowMult, vec3 playerPos, vec3 vi
     #endif
 
     #if defined BLOCKLIGHT_HIGHLIGHT && defined PER_PIXEL_LIGHT && !defined GBUFFERS_WATER
-        #ifdef GBUFFERS_HAND
-            foundValidLoc = true;
-        #endif
-        vec3 blocklightHighlight = foundValidLoc ? 4 * texelFetch(colortex14, ivec2(blocklightReadCoord), 0).rgb : vec3(0.0);
+        vec3 blocklightHighlight = vec3(0.0);
+        if (blocklightConfidence > 0.0 &&
+            all(greaterThanEqual(blocklightReadCoord, vec2(0.0))) &&
+            all(lessThan(blocklightReadCoord, vec2(textureSize(colortex14, 0))))) {
+            blocklightHighlight = 4.0 * texelFetch(colortex14, ivec2(blocklightReadCoord), 0).rgb * blocklightConfidence;
+            if (any(isnan(blocklightHighlight)) || any(isinf(blocklightHighlight))) blocklightHighlight = vec3(0.0);
+        }
         #ifdef CUSTOM_PBR
             #if RP_MODE == 2 // seusPBR
                 float metalness = materialMask * 255.1 < 240.0 ? materialMask * 255.1/240.0 : 0.0;

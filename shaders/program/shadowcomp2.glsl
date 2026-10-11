@@ -6,9 +6,9 @@
     const ivec3 workGroups = ivec3(64, 64, 1);
 #else
     #if SHADOW_QUALITY > 4 || SHADOW_SMOOTHING < 3
-        const const ivec3 workGroups = ivec3(256, 256, 1);
+        const ivec3 workGroups = ivec3(256, 256, 1);
     #else
-        const const ivec3 workGroups = ivec3(128, 128, 1);
+        const ivec3 workGroups = ivec3(128, 128, 1);
     #endif
 #endif
 

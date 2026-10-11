@@ -12,7 +12,16 @@ uniform sampler2D colortex10;
     layout(rgba16f) uniform image2D colorimg14;
     layout(rgba8) uniform writeonly image2D colorimg6;
 #endif
-layout(rgba16f) uniform image2D colorimg12;
+layout(rgba16f) uniform writeonly image2D colorimg12;
+layout(rgba16f) uniform readonly image2D diffuseHistoryI;
+#ifdef BLOCKLIGHT_HIGHLIGHT
+layout(rgba16f) uniform readonly image2D specularHistoryI;
+#endif
+#include "/lib/vx/voxelHistory.glsl"
+float PreviousLinearDepth(float depth) {
+    float denominator = 2.0 * depth - 1.0 + gbufferPreviousProjection[2][2];
+    return abs(gbufferPreviousProjection[3][2] / (abs(denominator) > 1e-8 ? denominator : -1e-8));
+}
 
 #include "/lib/util/random.glsl"
 #include "/lib/vx/irradianceCache.glsl"
@@ -60,6 +69,7 @@ void main() {
 
     ivec2 texelCoord = ivec2(gl_GlobalInvocationID);
     #if BLOCKLIGHT_RESOLUTION == 1
+        if (any(greaterThanEqual(texelCoord, ivec2(view)))) return;
         imageStore(
             colorimg12,
             texelCoord,
@@ -79,9 +89,10 @@ void main() {
         ivec2 readSize = upperBound - lowerBound;
         if (index < readSize.x * readSize.y) {
             ivec2 readCoords = ivec2(index % readSize.x, index / readSize.x);
-            readColors[readCoords.x][readCoords.y] = texelFetch(colortex10, readCoords + lowerBound, 0).rgb;
+            ivec2 safeLr = clamp(readCoords + lowerBound, ivec2(0), ivec2(ceil(view / BLOCKLIGHT_RESOLUTION)) - 1);
+            readColors[readCoords.x][readCoords.y] = texelFetch(colortex10, safeLr, 0).rgb;
             #ifdef BLOCKLIGHT_HIGHLIGHT
-                readSpeculars[readCoords.x][readCoords.y] = texelFetch(colortex13, readCoords + lowerBound, 0).rgb;
+                readSpeculars[readCoords.x][readCoords.y] = texelFetch(colortex13, safeLr, 0).rgb;
             #endif
             ivec2 hrReadCoords
                 = (readCoords + lowerBound) * BLOCKLIGHT_RESOLUTION
@@ -98,6 +109,7 @@ void main() {
                         (readCoords.y + lowerBound.y) * 1.618033988749895 * 1.618033988749895 * 1.618033988749895 * 1.618033988749895 * 1.618033988749895 * 1.618033988749895
                     ))
                 );
+            hrReadCoords = clamp(hrReadCoords, ivec2(0), ivec2(view) - 1);
             vec4 normalDepthData = texelFetch(colortex8, hrReadCoords, 0);
             normalDepthData.w *= 100.0;
             normalDepthDatas[readCoords.x][readCoords.y] = normalDepthData;
@@ -107,6 +119,7 @@ void main() {
         }
         barrier();
         memoryBarrierShared();
+        if (any(greaterThanEqual(texelCoord, ivec2(view)))) return;
         vec2 lrTexelCoord = vec2(texelCoord + 0.5) / BLOCKLIGHT_RESOLUTION;
         vec2 localLrTexCoord = vec2(lrTexelCoord) - lowerBound;
         vec2 weights = fract(lrTexelCoord);
@@ -122,18 +135,31 @@ void main() {
         playerPos.xyz = (vxPos - fractCamPos) * playerPos.w;
         playerPos.xyz += playerPos.w * (fractCamPosOffset + floorCamPosOffset);
         vec4 prevClipPos = gbufferPreviousProjection * (gbufferPreviousModelView * playerPos);
-        prevClipPos = prevClipPos / prevClipPos.w * 0.5 + 0.5;
-
-        vec3 writeColor = imageLoad(colorimg12, ivec2(view * prevClipPos.xy)).rgb;
+        bool historyValid = VoxelHistoryValid() && prevClipPos.w > 1e-8 &&
+            !any(isnan(prevClipPos)) && !any(isinf(prevClipPos)) &&
+            normalDepthData.a > 0.0 && length(normalDepthData.xyz) > 0.5;
+        prevClipPos = historyValid ? prevClipPos / prevClipPos.w * 0.5 + 0.5 : vec4(-1);
+        vec2 halfTexel = 0.5 / view;
+        historyValid = historyValid && all(greaterThanEqual(prevClipPos.xy, halfTexel)) &&
+            all(lessThanEqual(prevClipPos.xy, 1.0 - halfTexel)) && prevClipPos.z > 0.0 && prevClipPos.z < 1.0;
+        if (historyValid) {
+            float oldDepth = texelFetch(colortex1, ivec2(view * prevClipPos.xy), 0).r;
+            float oldLinear = PreviousLinearDepth(oldDepth);
+            float predictedLinear = PreviousLinearDepth(prevClipPos.z);
+            historyValid = oldDepth < 1.0 && abs(oldLinear - predictedLinear) <= max(0.1, 0.02 * predictedLinear) &&
+                length(texture(colortex4, prevClipPos.xy).gba * 2 - 1 - normalDepthData.xyz) <= 0.3;
+        }
+        // Read only the immutable previous-frame snapshot, never today's output.
+        vec3 writeColor = historyValid ? imageLoad(diffuseHistoryI, ivec2(view * prevClipPos.xy)).rgb : vec3(0);
         #ifdef BLOCKLIGHT_HIGHLIGHT
-            vec3 writeSpecular = imageLoad(colorimg14, ivec2(view * prevClipPos.xy)).rgb;
+            vec3 writeSpecular = historyValid ? imageLoad(specularHistoryI, ivec2(view * prevClipPos.xy)).rgb : vec3(0);
         #endif
-        float totalWeight = 1.0;
-        if (length(texture(colortex4, prevClipPos.xy).gba * 2 - 1 - normalDepthData.xyz) > 0.3 || clamp(prevClipPos.xy, vec2(0), vec2(1)) != prevClipPos.xy) {
-            totalWeight = 1e-2;
+        if (any(isnan(writeColor)) || any(isinf(writeColor))) historyValid = false;
+        float totalWeight = historyValid ? 1.0 : 1e-2;
+        if (!historyValid) {
             writeColor = 1e-2 * readSurfaceVoxelBlocklight(vxPos, normalDepthData.xyz);
             #ifdef BLOCKLIGHT_HIGHLIGHT
-                writeSpecular = vec3(0.0);
+                writeSpecular = vec3(0);
             #endif
         }
         normalDepthData.w *= 100.0;

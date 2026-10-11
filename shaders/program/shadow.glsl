@@ -274,7 +274,8 @@ layout(r32i) restrict uniform iimage3D occupancyVolume;
 #define WRITE_TO_SSBOS
 #include "/lib/vx/SSBOs.glsl"
 #include "/lib/materials/shadowChecks.glsl"
-#include "/lib/vx/positionHashing.glsl"
+#include "/lib/vx/lightData.glsl"
+#include "/lib/vx/voxelLod.glsl"
 
 void main() {
     vec3 fractCamPos = cameraPositionFract;
@@ -296,8 +297,12 @@ void main() {
     vec3[3] vxPos;
 
     for (int i = 0; i < 3; i++) vxPos[i] = positionV[i].xyz + fractCamPos;
-    vec3 minAbsPos = min(min(abs(vxPos[0]), abs(vxPos[1])), abs(vxPos[2]));
-    int localResolution = min(VOXEL_DETAIL_AMOUNT, int(-log2(infnorm(minAbsPos / voxelVolumeSize))));
+    // Vertex distances alone miss fine voxels when a triangle crosses the
+    // camera-centered volume. Use the nearest point of its enclosing box.
+    vec3 boundsMin = min(min(vxPos[0], vxPos[1]), vxPos[2]);
+    vec3 boundsMax = max(max(vxPos[0], vxPos[1]), vxPos[2]);
+    vec3 minAbsPos = max(vec3(0.0), max(boundsMin, -boundsMax));
+    int localResolution = getVoxelWriteLevelCount(minAbsPos);
     if (localResolution > 0) {
         if (localMat == 50088) { // entity flame needs to be moved outside of entity it belongs to or it will glitch out
             for (int i = 0; i < 3; i++) vxPos[i].y += 0.5 * sqrt(area);
@@ -374,6 +379,9 @@ void main() {
             imageAtomicAdd(voxelCols,
                 coords * ivec3(1, 2, 1) + ivec3(0, 1, 0),
                 packedCol.y);
+            // Reserved palette provenance bit: only original geometry donates
+            // color during dilation; copied air colors must never donate again.
+            imageAtomicOr(voxelCols, coords * ivec3(1, 2, 1), 1 << 28);
         }
         if (matV[0] == 32000) { // water
             imageAtomicOr(voxelCols, coords * ivec3(1, 2, 1), 1 << 26);
@@ -465,7 +473,6 @@ void main() {
             if (localMat == 10368) { // nether quartz ore colour doesn't work for some reason
                 col = vec4(1);
             }
-            uint hash = posToHash(coords - voxelVolumeSize/2) % uint(1<<18);
             vec3[3] blockRelPos;
             for (int i = 0; i < 3; i++) {
                 blockRelPos[i] = vxPos[i] - coords + voxelVolumeSize/2 - 0.5;
@@ -493,10 +500,7 @@ void main() {
                 uint(col.x * 32 + 0.5) | (uint(col.y * 32 + 0.5) << 16),
                 uint(col.z * 32 + 0.5)
             );
-            atomicAdd(globalLightHashMap[hash*4], packedMeanPos.x);
-            atomicAdd(globalLightHashMap[hash*4+1], packedMeanPos.y);
-            atomicAdd(globalLightHashMap[hash*4+2], packedCol2.x);
-            atomicAdd(globalLightHashMap[hash*4+3], packedCol2.y);
+            addVoxelLightData(coords, uvec4(packedMeanPos, packedCol2));
             if ((imageAtomicOr(occupancyVolume, coords, 1<<16) >> 16 & 1) == 0) {
                 int lightLevel = getLightLevel(localMat);
                 #if HELD_LIGHTING_MODE == 1

@@ -11,23 +11,13 @@
 ---------------------------------------------------------------------*/
 
 //User Settings//
+    #define CINEMATIC_MODE 0 //[0 1]
     #define SHADER_STYLE 1 //[1 4]
 
     #define RP_MODE 1 //[1 0 3 2]
 
     #define VOXEL_DETAIL_AMOUNT 6 //[1 2 3 4 5 6 7 8]
     #define VX_VOL_SIZE 1 //[0 1 2 3]
-    const float voxelDistance = 32;
-    #if VX_VOL_SIZE == 0
-        const ivec3 voxelVolumeSize = ivec3(96, 64, 96);
-    #elif VX_VOL_SIZE == 1
-        const ivec3 voxelVolumeSize = ivec3(128, 96, 128);
-    #elif VX_VOL_SIZE == 2
-        const ivec3 voxelVolumeSize = ivec3(256, 128, 256);
-    #elif VX_VOL_SIZE == 3
-        const ivec3 voxelVolumeSize = ivec3(512, 128, 512);
-    #endif
-
     #define SDF_UPDATE_INTERVAL 2 //[0 1 2 3 4 5 6 8 10 13 16 20]
     #define PER_PIXEL_LIGHT
     #define LONGER_LIGHT_LISTS
@@ -41,10 +31,10 @@
 
     #define GI_STRENGTH 1 //[0 1 2]
 
+    #define GI_SAMPLE_COUNT 7 //[1 3 7 13]
+    #define GI_AMBIENT_MIN 0.50 //[0 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00]
     #if GI_STRENGTH > 0
         #define GI
-        #define GI_SAMPLE_COUNT 7 //[1 3 7 13]
-        #define GI_AMBIENT_MIN 0.50 //[0 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00]
     #endif
 
     #define BLOCKLIGHT_I 1.0 //[0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.7 2.0 2.5 3.0 4.0 5.0 6.0 7.0 8.5 10.0]
@@ -75,7 +65,6 @@
   //#define WHITE_WORLD
     #define REALTIME_SHADOWS
     #define SHADOW_QUALITY 2 //[-1 0 1 2 3 4 5]
-    const float shadowDistance = 128.0; //[64.0 80.0 96.0 112.0 128.0 160.0 192.0 224.0 256.0 320.0 384.0 512.0 768.0 1024.0]
     #define PLAYER_VOXELIZATION
   //#define FOLIAGE_VOXELIZATION
     #define ENTITY_SHADOWS_DEFINE -1 //[-1 1]
@@ -425,6 +414,24 @@
     #define info9 0 //[0]
     #define info10 0 //[0]
 
+//Movie quality overrides run after raw user controls, before derived constants.//
+#include "/lib/misc/cinematicQuality.glsl"
+    // Deliberately not overridden by Cinematic Quality: the movie volume is
+    // 256 wide (half-extent 128), so the user's own draw distance already
+    // covers it while keeping shadow texel density high. Keep >= 128 for
+    // movie shots; a shorter distance leaves outer voxels unpopulated.
+    const float shadowDistance = 128.0; //[64.0 80.0 96.0 112.0 128.0 160.0 192.0 224.0 256.0 320.0 384.0 512.0 768.0 1024.0]
+    const float voxelDistance = 32;
+    #if VX_VOL_SIZE == 0
+        const ivec3 voxelVolumeSize = ivec3(96, 64, 96);
+    #elif VX_VOL_SIZE == 1
+        const ivec3 voxelVolumeSize = ivec3(128, 96, 128);
+    #elif VX_VOL_SIZE == 2
+        const ivec3 voxelVolumeSize = ivec3(256, 128, 256);
+    #elif VX_VOL_SIZE == 3
+        const ivec3 voxelVolumeSize = ivec3(512, 128, 512);
+    #endif
+
 //Visual Style and Performance Setting Handling//
     #if RP_MODE == 1
         #define IPBR
@@ -696,6 +703,8 @@
     // not by '#if defined(...)'. Properties must see this option as well as GLSL
     // or the streak images won't be allocated and its sampler falls back to unit 0.
     #ifdef KINO_STREAK
+    #endif
+    #ifdef LONGER_LIGHT_LISTS
     #endif
     #ifdef POM_ALLOW_CUTOUT
     #endif

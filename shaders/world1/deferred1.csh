@@ -1,4 +1,4 @@
-#version 430
+#version 430 compatibility
 #define END
 #define DEFERRED1
 #define CSH

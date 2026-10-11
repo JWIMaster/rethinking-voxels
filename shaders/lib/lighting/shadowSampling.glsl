@@ -56,6 +56,12 @@ vec3 SampleTAAFilteredShadow(vec3 shadowPos, float lViewPos, float offset, bool 
         if (lViewPos < 10.0) shadowSamples = 12;
     #endif
 
+    #if CINEMATIC_MODE == 1
+        // Denser paired PCF taps for movie capture; keep the same filter radius.
+        shadowSamples = 32;
+        if (lViewPos < 10.0) shadowSamples = 64;
+    #endif
+
     #if !defined GBUFFERS_ENTITIES && !defined GBUFFERS_HAND && !defined GBUFFERS_TEXTURED
         offset *= 1.3875;
     #else

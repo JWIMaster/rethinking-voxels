@@ -1,0 +1,14 @@
+{
+  "export": "C:\\Users\\jwalr\\rethinking-voxels\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "installed": [
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion.zip",
+    "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\minecraft\\shaderpacks\\rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip"
+  ],
+  "backup": "C:\\Users\\jwalr\\AppData\\Roaming\\PrismLauncher\\instances\\Skyblock Vanilla\\shaderpack-backups\\before-voxel-stability-cinematic-20261011-042723",
+  "sha256": "a66ef3c9ad1a6e01098f0f43e15db3a37c4b3193e8ad716b864f17f3b744238b",
+  "size_bytes": 8333199,
+  "settings_preserved": true,
+  "iris_config_modified": false,
+  "current_shaderpack": "rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip",
+  "fix": "Correct voxel/cache travel races, hash collisions, LOD/trace safety and abrupt lighting confidence fallback; add default-OFF single-switch Cinematic Quality while preserving camera effects, barrel distortion, flare corrections and all user settings."
+}

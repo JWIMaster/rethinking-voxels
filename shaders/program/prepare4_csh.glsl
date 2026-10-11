@@ -22,6 +22,7 @@ layout(rgba16f) uniform image2D colorimg10;
     layout(rgba16f) uniform image2D colorimg13;
 #endif
 layout(rgba16i) uniform iimage2D colorimg11;
+layout(rgba16i) uniform readonly iimage2D candidateHistoryI;
 
 vec3 fractCamPos =
     cameraPositionInt.y == -98257195 ?
@@ -36,6 +37,7 @@ ivec3 floorCamPosOffset =
 #include "/lib/vx/voxelReading.glsl"
 #include "/lib/util/random.glsl"
 #include "/lib/vx/positionHashing.glsl"
+#include "/lib/vx/lightData.glsl"
 #ifdef BLOCKLIGHT_HIGHLIGHT
     #include "/lib/lighting/ggx.glsl"
 #endif
@@ -71,7 +73,20 @@ shared vec3[MAX_LIGHT_COUNT] lightPositions;
 shared vec3[MAX_LIGHT_COUNT] lightCols;
 shared int[MAX_LIGHT_COUNT] extraData;
 shared float[MAX_LIGHT_COUNT] weights;
-shared uint[128] lightHashMap;
+#define LIGHT_DEDUP_CAPACITY 1024
+shared uint[LIGHT_DEDUP_CAPACITY] lightHashMap;
+
+bool claimLightCell(ivec3 volumeCoord) {
+    uint key = 1u + uint(volumeCoord.x + voxelVolumeSize.x * (volumeCoord.y + voxelVolumeSize.y * volumeCoord.z));
+    uint slot = posToHash(volumeCoord) % uint(LIGHT_DEDUP_CAPACITY);
+    for (int probe = 0; probe < LIGHT_DEDUP_CAPACITY; ++probe) {
+        uint previous = atomicCompSwap(lightHashMap[slot], 0u, key);
+        if (previous == key) return false;
+        if (previous == 0u) return true;
+        slot = (slot + 1u) % uint(LIGHT_DEDUP_CAPACITY);
+    }
+    return false;
+}
 
 ivec2 getFlipPair(int index, int stage) {
     int groupSize = 1<<stage;
@@ -115,7 +130,9 @@ void dispersePair(int index, int stage) {
 }
 
 float distanceFalloff(float maxDistRelDist) {
-    return (sqrt(1 - maxDistRelDist)) / (maxDistRelDist
+    if (isnan(maxDistRelDist) || isinf(maxDistRelDist) || maxDistRelDist >= 1.0) return 0.0;
+    maxDistRelDist = max(0.0, maxDistRelDist);
+    return (sqrt(max(0.0, 1.0 - maxDistRelDist))) / (maxDistRelDist
         #if R2_FALLOFF == 1
             * maxDistRelDist
         #endif
@@ -129,35 +146,37 @@ float distanceFalloff(float maxDistRelDist) {
 }
 
 void registerLight(ivec3 lightCoord, vec3 referencePos, vec3 referenceNormal, float weight) {
-    bool isStillLight = (imageLoad(occupancyVolume, lightCoord + voxelVolumeSize/2).r >> 16 & 1) != 0;
+    ivec3 volumeCoord = lightCoord + voxelVolumeSize/2;
+    if (!voxelCoordInBounds(volumeCoord)) return;
+    bool isStillLight = (imageLoad(occupancyVolume, volumeCoord).r >> 16 & 1) != 0;
     if (!isStillLight) {
         for (int k = 0; k < 6; k++) {
             ivec3 offset = (k/3*2-1) * ivec3(equal(ivec3(k%3), ivec3(0, 1, 2)));
-            if ((imageLoad(occupancyVolume, lightCoord + offset + voxelVolumeSize/2).r >> 16 & 1) != 0) {
+            ivec3 neighborCoord = volumeCoord + offset;
+            if (voxelCoordInBounds(neighborCoord) && (imageLoad(occupancyVolume, neighborCoord).r >> 16 & 1) != 0) {
                 isStillLight = true;
                 lightCoord += offset;
+                volumeCoord = neighborCoord;
                 break;
             }
         }
     }
-    uint hash = posToHash(lightCoord) % uint(128*32);
-    bool known = !isStillLight;
-    if (isStillLight) {
-        known = (atomicOr(lightHashMap[hash/32], uint(1)<<hash%32) & uint(1)<<hash%32) != 0;
-    }
+    if (!isStillLight) return;
+    uvec4 packedLightData = loadVoxelLightData(volumeCoord);
+    uvec2 packedLightSubPos = packedLightData.xy;
+    uvec2 packedLightCol = packedLightData.zw;
+    uint sampleCount = packedLightSubPos.y >> 16;
+    if (sampleCount == 0u || !claimLightCell(volumeCoord)) return;
 
-    if (!known) {
+    {
         int lightIndex = atomicAdd(lightCount, 1);
         if (lightIndex < MAX_LIGHT_COUNT) {
-            uint hash = posToHash(lightCoord) % uint(1<<18);
-            uvec2 packedLightSubPos = uvec2(globalLightHashMap[4*hash], globalLightHashMap[4*hash+1]);
-            uvec2 packedLightCol = uvec2(globalLightHashMap[4*hash+2], globalLightHashMap[4*hash+3]);
             int thisLightExtraData = imageLoad(occupancyVolume, lightCoord + voxelVolumeSize/2).r;
             vec3 subLightPos = (packedLightSubPos.y >> 16) == 0 ? vec3(0.5) : 1.0/32.0 * vec3(packedLightSubPos.x & 0xffff, packedLightSubPos.x>>16, packedLightSubPos.y & 0xffff) / (packedLightSubPos.y >> 16) - 1;
             vec3 lightCol = 1.0/32.0 * vec3(packedLightCol.x & 0xffff, packedLightCol.x>>16, packedLightCol.y & 0xffff) / (packedLightSubPos.y >> 16);
             vec3 dir = lightCoord + subLightPos - referencePos;
             float dirLen = length(dir);
-            float ndotl = dot(normalize(dir), referenceNormal);
+            float ndotl = dot(dir / max(dirLen, 1e-6), referenceNormal);
             float thisTraceLen = (thisLightExtraData>>17 & 31)/32.0;
             lightCoords[lightIndex] = ivec4(lightCoord, lightIndex);
 
@@ -184,8 +203,8 @@ void main() {
         cumulatedPos = ivec4(0);
         cumulatedNormal = ivec4(0);
     }
-    if (index < 128) {
-        lightHashMap[index] = 0;
+    if (index < LIGHT_DEDUP_CAPACITY) {
+        lightHashMap[index] = 0u;
     }
     if (index < MAX_LIGHT_COUNT) {
         lightPositions[index] = vec3(0);
@@ -209,23 +228,26 @@ void main() {
             ))
         );
     ivec2 writeTexelCoord = ivec2(gl_GlobalInvocationID.xy);
-    vec4 normalDepthData = texelFetch(colortex8, readTexelCoord, 0);
+    bool readInBounds = all(greaterThanEqual(readTexelCoord, ivec2(0))) && all(lessThan(readTexelCoord, textureSize(colortex8, 0)));
+    vec4 normalDepthData = readInBounds ? texelFetch(colortex8, readTexelCoord, 0) : vec4(0.0, 0.0, 0.0, 2.0);
     #ifdef BLOCKLIGHT_HIGHLIGHT
-        vec3 pbrMat = texelFetch(colortex3, readTexelCoord, 0).rgb;
-        float smoothness = pbrMat.r;
-        float materialMask = pbrMat.g;
+        float smoothness = 0.0;
     #endif
     ivec3 vxPosFrameOffset = -floorCamPosOffset;
-    bool validData = (normalDepthData.a < 1.5 && length(normalDepthData.rgb) > 0.1 && all(lessThan(readTexelCoord, ivec2(view + 0.1))));
+    bool validData = (normalDepthData.a < 1.5 && length(normalDepthData.rgb) > 0.1 && all(lessThan(readTexelCoord, ivec2(view + 0.1))) && !any(isnan(normalDepthData)) && !any(isinf(normalDepthData)));
     for (int k = 1; k < BLOCKLIGHT_RESOLUTION; k++) {
         if (validData) break;
         for (int i = 0; i < 2 * k - 1; i++) {
             ivec2 offset = i < k ? ivec2(i, k) : ivec2(k, 2 * k - 2 - i);
             ivec2 newReadTexelCoord = readTexelCoord + offset;
-            normalDepthData = texelFetch(colortex8, newReadTexelCoord, 0);
-            bool validData = (normalDepthData.a < 1.5 && length(normalDepthData.rgb) > 0.1 && all(lessThan(newReadTexelCoord, ivec2(view + 0.1))));
-            if (validData) {
+            if (any(lessThan(newReadTexelCoord, ivec2(0))) || any(greaterThanEqual(newReadTexelCoord, textureSize(colortex8, 0)))) continue;
+            vec4 candidateData = texelFetch(colortex8, newReadTexelCoord, 0);
+            bool foundValidData = candidateData.a < 1.5 && length(candidateData.rgb) > 0.1 && !any(isnan(candidateData)) && !any(isinf(candidateData));
+            if (foundValidData) {
+                normalDepthData = candidateData;
                 readTexelCoord = newReadTexelCoord;
+                validData = true;
+                break;
             }
         }
     }
@@ -236,6 +258,9 @@ void main() {
     barrier();
 
     if (validData) {
+        #ifdef BLOCKLIGHT_HIGHLIGHT
+            smoothness = texelFetch(colortex3, readTexelCoord, 0).r;
+        #endif
         playerPos =
             gbufferModelViewInverse *
             (gbufferProjectionInverse *
@@ -245,9 +270,8 @@ void main() {
         playerPos /= playerPos.w;
         vxPos = playerPos.xyz + fractCamPos;
 
-        normalDepthData.xyz = normalize(
-            normalDepthData.xyz - max(0.0, dot(normalDepthData.xyz, playerPos.xyz)) / pow2(length(playerPos.xyz)) * playerPos.xyz
-        );
+        vec3 adjustedNormal = normalDepthData.xyz - max(0.0, dot(normalDepthData.xyz, playerPos.xyz)) / max(dot(playerPos.xyz, playerPos.xyz), 1e-8) * playerPos.xyz;
+        normalDepthData.xyz = normalize(length(adjustedNormal) > 1e-6 ? adjustedNormal : normalDepthData.xyz);
 
         float bias = max(0.6/(1<<VOXEL_DETAIL_AMOUNT), 1.2 * infnorm(vxPos/voxelVolumeSize));
         int thisResolution = getVoxelResolution(vxPos);
@@ -267,8 +291,8 @@ void main() {
             float dfVal = getDistanceField(biasedVxPos);
             float dfGradPerpLength = length(dfGradPerp);
             if (dfGradPerpLength > 0.1) {
-                float resolution = min(VOXEL_DETAIL_AMOUNT, -log2(infnorm(abs(vxPos) / voxelVolumeSize) - 0.5));
-                dfVal = min(dfVal, getDistanceField(biasedVxPos - dfGradPerp / (pow(2, resolution + 1) * dfGradPerpLength)));
+                float voxelScale = exp2(float(getVoxelResolution(biasedVxPos)));
+                dfVal = min(dfVal, getDistanceField(biasedVxPos - dfGradPerp / (2.0 * voxelScale * dfGradPerpLength)));
             }
             if (dfVal > dfValMargin) break;
             bias += max(0.01, dfValMargin - dfVal);
@@ -283,16 +307,17 @@ void main() {
     }
     barrier();
     memoryBarrierShared();
-    vec3 meanPos = vec3(cumulatedPos.xyz)/cumulatedPos.w;
-    vec3 meanNormal = vec3(cumulatedNormal.xyz)/cumulatedNormal.w;
+    bool hasGroupData = cumulatedPos.w > 0 && cumulatedNormal.w > 0;
+    vec3 meanPos = vec3(cumulatedPos.xyz) / max(cumulatedPos.w, 1);
+    vec3 meanNormal = vec3(cumulatedNormal.xyz) / max(cumulatedNormal.w, 1);
 
     if (false && validData) {
         meanPos = biasedVxPos;
         meanNormal = normalDepthData.xyz;
     }
 
-    if (index < MAX_LIGHT_COUNT) {
-        ivec4 prevFrameLight = imageLoad(colorimg11, writeTexelCoord);
+    if (hasGroupData && index < MAX_LIGHT_COUNT && all(lessThan(writeTexelCoord, imageSize(candidateHistoryI)))) {
+        ivec4 prevFrameLight = imageLoad(candidateHistoryI, writeTexelCoord);
         if (prevFrameLight.w > 0) {
             registerLight(prevFrameLight.xyz + vxPosFrameOffset, meanPos, meanNormal, 0.0001 * prevFrameLight.w);
         }
@@ -305,19 +330,22 @@ void main() {
         }
         vec3 rayNormal0;
         vec4 rayHit0 = voxelTrace(biasedVxPos, LIGHT_TRACE_LENGTH * dir, rayNormal0, 1|1<<16);
-        ivec3 rayHit0Coords = ivec3(rayHit0.xyz - 0.5 * rayNormal0 + 1000) - 1000;
-        registerLight(rayHit0Coords, vxPos, normalDepthData.xyz, 0.0);
+        if (rayHit0.w > 0.0) {
+            ivec3 rayHit0Coords = ivec3(floor(rayHit0.xyz - 0.5 * rayNormal0));
+            registerLight(rayHit0Coords, vxPos, normalDepthData.xyz, 0.0);
+        }
     }
 
-    if (index < 125) {
+    if (hasGroupData && index < 125) {
         ivec3 lightPos0 = ivec3(index%5, index/5%5, index/25%5) - 2;
         registerLight(lightPos0, meanPos, meanNormal, 0.0);
     }
 
-    if (index < 8 * MAX_LIGHT_COUNT) {
+    if (hasGroupData && index < 8 * MAX_LIGHT_COUNT) {
         ivec2 offset = (1 + index%8/4*3) * (index%4/2*2-1) * ivec2(index%2, (index+1)%2);
         int otherLightIndex = index / 8;
-        ivec4 prevFrameLight = imageLoad(colorimg11, ivec2(gl_WorkGroupSize.xy) * (ivec2(gl_WorkGroupID.xy) + offset) + ivec2(otherLightIndex % gl_WorkGroupSize.x, otherLightIndex / gl_WorkGroupSize.x));
+        ivec2 historyCoord = ivec2(gl_WorkGroupSize.xy) * (ivec2(gl_WorkGroupID.xy) + offset) + ivec2(otherLightIndex % gl_WorkGroupSize.x, otherLightIndex / gl_WorkGroupSize.x);
+        ivec4 prevFrameLight = all(greaterThanEqual(historyCoord, ivec2(0))) && all(lessThan(historyCoord, imageSize(candidateHistoryI))) ? imageLoad(candidateHistoryI, historyCoord) : ivec4(0);
         if (prevFrameLight.w > 0) {
             registerLight(prevFrameLight.xyz + vxPosFrameOffset, meanPos, meanNormal, 0.0001 / (index/8*2+1) * prevFrameLight.w);
         }
@@ -360,13 +388,14 @@ void main() {
             if (thisLightIndex >= lightCount) break;
             float lightSize = 0.5;
             vec3 lightPos = lightPositions[thisLightIndex];
-            lightSize = clamp(lightSize, 0.01, getDistanceField(lightPos));
-            float ndotl0 = max(0.0, dot(normalize(lightPos - vxPos), normalDepthData.xyz));
+            lightSize = clamp(lightSize, 0.01, max(0.01, getDistanceField(lightPos)));
+            vec3 surfaceToLight = lightPos - vxPos;
+            float ndotl0 = max(0.0, dot(surfaceToLight / max(length(surfaceToLight), 1e-6), normalDepthData.xyz));
             vec3 dir = lightPos - biasedVxPos;
             float dirLen = length(dir);
             float thisTraceLen = (extraData[thisLightIndex]>>17 & 31)/32.0;
 
-            if (dirLen < thisTraceLen * LIGHT_TRACE_LENGTH && ndotl0 > 0.001) {
+            if (dirLen > 1e-6 && dirLen < thisTraceLen * LIGHT_TRACE_LENGTH && ndotl0 > 0.001) {
                 float lightBrightness = 1.5 * thisTraceLen;
                 lightBrightness *= lightBrightness;
                 vec4 rayHit1 = coneTrace(biasedVxPos, (1.0 - 0.1 / (dirLen + 0.1)) * dir, lightSize * LIGHTSOURCE_SIZE_MULT / dirLen, dither);
@@ -428,11 +457,13 @@ void main() {
         if (lWriteSpecular > 0.01) {
             writeSpecular *= log(lWriteSpecular+1)/lWriteSpecular;
         }
-        imageStore(colorimg13, writeTexelCoord, vec4(writeSpecular, 1));
+        if (all(lessThan(writeTexelCoord, imageSize(colorimg13)))) imageStore(colorimg13, writeTexelCoord, vec4(writeSpecular, 1));
     #endif
-    imageStore(colorimg10, writeTexelCoord, vec4(writeColor, 1));
+    if (all(lessThan(writeTexelCoord, imageSize(colorimg10)))) imageStore(colorimg10, writeTexelCoord, vec4(writeColor, 1));
     ivec4 lightPosToStore = (index < lightCount && lightCoords[index].w > 0) ? lightCoords[index] : ivec4(0);
-    imageStore(colorimg11, writeTexelCoord, lightPosToStore);
+    // RGBA16I history scores must stay positive instead of narrowing/wrapping.
+    lightPosToStore.w = clamp(lightPosToStore.w, 0, 32767);
+    if (all(lessThan(writeTexelCoord, imageSize(colorimg11)))) imageStore(colorimg11, writeTexelCoord, lightPosToStore);
 }
 #else
     const ivec3 workGroups = ivec3(1, 1, 1);

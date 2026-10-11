@@ -16,6 +16,7 @@ EXPORT = ROOT / EXPORT_NAME
 TEMP = ROOT / (EXPORT_NAME + ".fixed.tmp")
 IRIS = PROFILE / "minecraft/config/iris.properties"
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+DOCS = ("KinoStreak-README.md", "Voxel-Stability-Cinematic-README.md")
 assert ROOT == Path(r"C:\Users\jwalr\rethinking-voxels")
 assert EXPORT.is_file() and PROFILE.is_dir() and IRIS.is_file()
 assert not TEMP.exists()
@@ -26,7 +27,7 @@ for name in NAMES:
     print("Verified replacement target:", target.resolve())
 
 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-BACKUP = PROFILE / "shaderpack-backups" / ("before-kino-streak-color-mode-" + stamp)
+BACKUP = PROFILE / "shaderpack-backups" / ("before-voxel-stability-cinematic-" + stamp)
 BACKUP.mkdir(parents=True, exist_ok=False)
 settings = {}
 for name in NAMES:
@@ -41,12 +42,13 @@ shutil.copy2(EXPORT, BACKUP / ("export-" + EXPORT_NAME))
 
 with ZipFile(EXPORT) as old, ZipFile(TEMP, "w", ZIP_DEFLATED, compresslevel=9) as fixed:
     for info in old.infolist():
-        if not info.is_dir() and not info.filename.startswith("shaders/") and info.filename != "KinoStreak-README.md":
+        if not info.is_dir() and not info.filename.startswith("shaders/") and info.filename not in DOCS:
             fixed.writestr(info.filename, old.read(info.filename))
     for path in sorted((ROOT / "shaders").rglob("*")):
         if path.is_file():
             fixed.write(path, path.relative_to(ROOT).as_posix())
-    fixed.write(ROOT / "KinoStreak-README.md", "KinoStreak-README.md")
+    for name in DOCS:
+        fixed.write(ROOT / name, name)
 
 with ZipFile(TEMP) as fixed, ZipFile(EXPORT) as old:
     assert fixed.testzip() is None
@@ -55,7 +57,30 @@ with ZipFile(TEMP) as fixed, ZipFile(EXPORT) as old:
         stages = [n for n in fixed.namelist() if n.startswith(f"shaders/{world}/composite3") and n.endswith(".csh")]
         assert len(stages) == 20, (world, len(stages))
         assert not any(n.startswith(f"shaders/{world}/composite5") and n.endswith(".csh") for n in fixed.namelist()), "Old post-blur chain must not remain"
-    assert fixed.read("shaders/program/final.glsl") == old.read("shaders/program/final.glsl"), "Barrel distortion changed unexpectedly"
+        for base, count in (("shadowcomp1", 6), ("prepare4", 3)):
+            chain = [n for n in fixed.namelist() if n.startswith(f"shaders/{world}/{base}") and n.endswith(".csh")]
+            assert len(chain) == count, (world, base, len(chain))
+    assert b"#define CINEMATIC_MODE 0 //[0 1]" in fixed.read("shaders/lib/common.glsl"), "Cinematic must default OFF"
+    for name in DOCS:
+        assert fixed.read(name) == (ROOT / name).read_bytes()
+    # The only final-pass change is removing the obsolete hash-table clear.
+    # Verify the entire rest of the display/barrel program remains byte-exact.
+    old_final = old.read("shaders/program/final.glsl").decode("utf-8")
+    legacy_clear = '''    int index = int(gl_FragCoord.x) + int(viewWidth + 0.5) * int(gl_FragCoord.y);
+    int clearPerFragment = 1 + 4 * (1<<18) / int(viewWidth * viewHeight + 0.5);
+    if (index < 4 * (1<<18) / clearPerFragment) {
+        for (int j = 0; j < clearPerFragment; j++) {
+            globalLightHashMap[index * clearPerFragment + j] = uint(0);
+        }
+    }
+
+'''
+    clear_note = '''    // Per-voxel light records are cleared by Iris before voxelization, not
+    // by a screen-size-dependent hash-table clear in this final display pass.
+
+'''
+    expected_final = old_final.replace(legacy_clear, clear_note)
+    assert fixed.read("shaders/program/final.glsl").decode("utf-8") == expected_final, "Barrel/display code changed unexpectedly"
     assert fixed.read("shaders/lib/misc/lensDistortion.glsl") == old.read("shaders/lib/misc/lensDistortion.glsl")
     for path in (ROOT / "shaders").rglob("*"):
         if path.is_file():
@@ -90,7 +115,7 @@ report = {
     "export": str(EXPORT), "installed": [str(PACKS / n) for n in NAMES],
     "backup": str(BACKUP), "sha256": new_hash, "size_bytes": EXPORT.stat().st_size,
     "settings_preserved": True, "iris_config_modified": False, "current_shaderpack": selection,
-    "fix": "Add Flare Color Mode: Current / Custom Tint (default) or fixed Classic Blue, preserving sky rejection, pre-world-blur generation and all existing user settings.",
+    "fix": "Correct voxel/cache travel races, hash collisions, LOD/trace safety and abrupt lighting confidence fallback; add default-OFF single-switch Cinematic Quality while preserving camera effects, barrel distortion, flare corrections and all user settings.",
 }
 receipt = ROOT / ("kino-streak-installation-" + stamp + ".json")
 assert not receipt.exists()

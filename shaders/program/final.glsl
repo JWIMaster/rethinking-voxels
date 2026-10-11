@@ -151,13 +151,8 @@ void main() {
     /* DRAWBUFFERS:0 */
     gl_FragData[0] = vec4(color, 1.0);
 
-    int index = int(gl_FragCoord.x) + int(viewWidth + 0.5) * int(gl_FragCoord.y);
-    int clearPerFragment = 1 + 4 * (1<<18) / int(viewWidth * viewHeight + 0.5);
-    if (index < 4 * (1<<18) / clearPerFragment) {
-        for (int j = 0; j < clearPerFragment; j++) {
-            globalLightHashMap[index * clearPerFragment + j] = uint(0);
-        }
-    }
+    // Per-voxel light records are cleared by Iris before voxelization, not
+    // by a screen-size-dependent hash-table clear in this final display pass.
 
     if (gl_FragCoord.x < 0.0) gl_FragData[0] = texture(shadowcolor0, vec2(0.5));
 }

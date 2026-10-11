@@ -29,6 +29,10 @@ Sky rejection is per original source texel, before vertical filtering, brightnes
 
 The first export incorrectly used only `#if defined KINO_STREAK` references for the boolean option. Iris recognizes boolean shader options only when referenced by a plain `#ifdef` or `#ifndef`. Consequently GLSL enabled the effect but the properties preprocessor omitted both atlas allocations; the unset streak sampler used texture unit zero and stretched the left half of the scene over the image. The fix explicitly activates the boolean option for Iris discovery. Compute and composition now also reject resources whose dimensions do not match the expected half-height atlases, preventing that fallback from drawing an overlay or writing unrelated images. This is a texture-allocation/binding fix, not a reduction in depth-of-field or motion-blur settings.
 
+## Travel stability and movie quality
+
+The update also fixes voxel/light-history corruption during travel and adds a default-OFF Cinematic Quality switch. See the [travel stability and capture guide](<Voxel-Stability-Cinematic-README.md>) for controls, VRAM cost, warm-up guidance and renderer limits.
+
 ## Export and installation
 
 The exported zip has `shaders/` at its root. In Skyblock Vanilla the corrected version replaces both `rethinking-voxels_r0.1-beta9_barrel-distortion.zip` and the currently used `rethinking-voxels_r0.1-beta9_barrel-distortion_kino-streak.zip`, preserving each `.zip.txt` options file and leaving the current Iris shader selection unchanged. The previous installed zip and settings are backed up outside the shaderpacks directory. If Minecraft is already open, reload shaders (Iris's Reload Shaders key, normally R) or toggle shaders off/on to load the replaced archive.

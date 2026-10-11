@@ -1,5 +1,5 @@
 #version 430
 
 #define NETHER
-#define CSH_A
+#define CSH
 #include "/program/shadowcomp1.glsl"

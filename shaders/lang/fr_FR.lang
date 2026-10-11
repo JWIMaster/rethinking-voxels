@@ -574,6 +574,11 @@ value.PIXEL_SHADOW.32=32x32 §e[*]
 value.PIXEL_SHADOW.64=64x64 §e[*]
 value.PIXEL_SHADOW.128=128x128 §e[*]
 
+option.CINEMATIC_MODE=Qualité cinématique
+option.CINEMATIC_MODE.comment=Qualité maximale pour les films : volume de voxels 256x128x256, détails fins, éclairage pleine résolution, 128 tracés, GI et POM maximaux, ombres denses. Très lent ; les images utilisent environ 1 Gio en plus de Minecraft. Désactiver restaure vos réglages ordinaires. Gardez une distance d'ombres de 128 minimum pour remplir tout le volume. Chargez les chunks et laissez converger la lumière avant la capture. Ne fige pas le temps et ne remplace pas les voxels par un path tracer hors ligne.
+value.CINEMATIC_MODE.0=Non
+value.CINEMATIC_MODE.1=Oui
+
 screen.STREAK_SETTINGS=KinoStreak / Traînées anamorphiques
 screen.STREAK_SETTINGS.comment=Traînées lumineuses horizontales adaptées de KinoStreak par Keijiro Takahashi. Indépendantes du Bloom, appliquées avant le tone mapping et la distorsion en barillet.
 option.KINO_STREAK=Traînées anamorphiques

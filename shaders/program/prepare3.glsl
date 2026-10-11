@@ -34,9 +34,15 @@ void main() {
         int validAroundCount = 0;
         bool extendable = true;
         for (int k = 0, invalidInARow = 0; k < 10; k++) {
-            vec4 aroundData = texelFetch(colortex8, texelCoord + offsets[k%8], 0);
+            ivec2 aroundCoord = texelCoord + offsets[k%8];
+            if (any(lessThan(aroundCoord, ivec2(0))) || any(greaterThanEqual(aroundCoord, ivec2(view)))) {
+                invalidInARow++;
+                if (invalidInARow >= 4) { extendable = false; break; }
+                continue;
+            }
+            vec4 aroundData = texelFetch(colortex8, aroundCoord, 0);
             #ifdef BLOCKLIGHT_HIGHLIGHT
-                vec4 aroundMatData = texelFetch(colortex3, texelCoord + offsets[k%8], 0);
+                vec4 aroundMatData = texelFetch(colortex3, aroundCoord, 0);
             #endif
             if (aroundData.a > 1.5) {
                 invalidInARow++;
@@ -55,7 +61,7 @@ void main() {
                 validAroundCount++;
             }
         }
-        if (extendable) {
+        if (extendable && validAroundCount > 0) {
             writeData = avgAroundData / validAroundCount;
             #ifdef BLOCKLIGHT_HIGHLIGHT
                 writeMatData = avgMatData / validAroundCount;
@@ -73,8 +79,10 @@ void main() {
             #endif
             vec3 rayHit = rayTrace(rayStartPos, dir, dither);
             float hitDF = getDistanceField(rayHit);
-            if (hitDF < 0.1) {
-                writeData.rgb = normalize(distanceFieldGradient(rayHit));
+            vec3 gradient = distanceFieldGradient(rayHit);
+            float gradientLength2 = dot(gradient, gradient);
+            if (hitDF < 0.1 && gradientLength2 > 1e-12 && !any(isnan(gradient)) && !any(isinf(gradient))) {
+                writeData.rgb = gradient * inversesqrt(gradientLength2);
                 vec4 clipHitPos = gbufferProjection * (gbufferModelView * vec4(rayHit - fractCamPos, 1));
                 clipHitPos = 0.5 / clipHitPos.w * clipHitPos + 0.5;
                 writeData.a = 1 - clipHitPos.z;
@@ -83,6 +91,7 @@ void main() {
             }
         }
     }
+    if (any(isnan(writeData)) || any(isinf(writeData))) writeData = vec4(0);
     /*RENDERTARGETS:8*/
     gl_FragData[0] = writeData;
     #ifdef BLOCKLIGHT_HIGHLIGHT

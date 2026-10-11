@@ -664,6 +664,11 @@ option.TEXTURE_RES=Fallback Resolution
 option.TEXTURE_RES.comment=Texture resolution that will be used where pixelated effects are calculated without having texture coordinates, such as blocklight.
 suffix.TEXTURE_RES=/Block
 
+option.CINEMATIC_MODE=Cinematic Quality
+option.CINEMATIC_MODE.comment=Movie-only maximum quality: 256x128x256 voxel volume, finest nested detail, full-resolution block lighting, 128 light traces, maximum GI/POM and dense shadow sampling. Very slow; custom images alone use about 1 GiB plus Minecraft VRAM. Overrides quality while ON; OFF restores your saved ordinary settings. Keep shadow draw distance at 128 or more so the whole volume is populated. Let chunks and lighting settle before capture. Does not freeze time or replace finite voxels with an offline path tracer.
+value.CINEMATIC_MODE.0=OFF
+value.CINEMATIC_MODE.1=ON
+
 screen.STREAK_SETTINGS=KinoStreak / Anamorphic Streaks
 screen.STREAK_SETTINGS.comment=Horizontal lens streaks from bright HDR highlights, adapted from KinoStreak by Keijiro Takahashi. Independent of ordinary Bloom; applies before tone mapping and barrel distortion.
 option.KINO_STREAK=Anamorphic Streaks

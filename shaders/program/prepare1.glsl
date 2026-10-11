@@ -1,4 +1,5 @@
 #include "/lib/common.glsl"
+#include "/lib/vx/voxelHistory.glsl"
 
 //////Fragment Shader//////Fragment Shader//////
 #ifdef FRAGMENT_SHADER
@@ -16,6 +17,7 @@ layout(r32ui) uniform uimage2D colorimg9;
 #include "/lib/vx/SSBOs.glsl"
 
 void main() {
+    if (!VoxelHistoryValid()) discard;
     ivec2 texelCoord = ivec2(gl_FragCoord.xy);
     float prevDepth = texelFetch(colortex1, texelCoord, 0).r;
     vec4 prevClipPos = vec4(gl_FragCoord.xy / view, prevDepth, 1) * 2 - 1;
@@ -28,6 +30,7 @@ void main() {
             newClipPos.xyz += newClipPos.w * velocity;
         }
         newClipPos = projectionMatrix * newClipPos;
+        if (newClipPos.w <= 1e-8 || any(isnan(newClipPos)) || any(isinf(newClipPos))) discard;
         newClipPos /= newClipPos.w;
     }
     newClipPos = 0.5 * newClipPos + 0.5;

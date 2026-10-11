@@ -1,4 +1,5 @@
 #include "/lib/common.glsl"
+#include "/lib/vx/voxelHistory.glsl"
 
 //////1st Compute Shader//////1st Compute Shader//////1st Compute Shader//////
 /*
@@ -18,35 +19,30 @@ This program offsets irradiance cache data to account for camera movement, and h
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-ivec3 floorCamPosOffset =
-    cameraPositionInt.y == -98257195 ?
-    ivec3((floor(cameraPosition) - floor(previousCameraPosition)) * 1.001) :
-    cameraPositionInt - previousCameraPositionInt;
-
-#define WRITE_TO_SSBOS
-
-layout(rgba16f) uniform image3D irradianceCacheI;
-layout(rgba16i) uniform iimage3D lightStorage;
+layout(rgba16f) uniform writeonly image3D irradianceCacheI;
+layout(rgba16i) uniform writeonly iimage3D lightStorage;
+layout(rgba16f) uniform readonly image3D irradianceSnapshotI;
+layout(rgba16i) uniform readonly iimage3D lightStorageSnapshotI;
 
 void main() {
     ivec3 coords = ivec3(gl_GlobalInvocationID);
-    // this actually works for having threads be executed in the correct order so that they don't read the output of other previously run threads
-    coords = coords * ivec3(greaterThan(floorCamPosOffset, ivec3(-1))) +
-        (voxelVolumeSize - coords - 1) * ivec3(lessThan(floorCamPosOffset, ivec3(0)));
-    ivec4 lightPos = imageLoad(lightStorage, coords);
-    ivec3 prevCoords = coords + floorCamPosOffset;
-    vec4[2] writeColors;
-    for (int k = 0; k < 2; k++) {
-        writeColors[k] = (all(lessThan(prevCoords, voxelVolumeSize)) && all(greaterThanEqual(prevCoords, ivec3(0)))) ? imageLoad(irradianceCacheI, prevCoords + ivec3(0, k * voxelVolumeSize.y, 0)) : vec4(0);
+    if (!VoxelHistoryCoordValid(coords)) return;
+    ivec3 delta = VoxelCameraDelta();
+    ivec3 prevCoords = coords + delta;
+    bool valid = VoxelHistoryValid() && VoxelHistoryCoordValid(prevCoords);
+    for (int bank = 0; bank < 2; ++bank) {
+        ivec3 offset = ivec3(0, bank * voxelVolumeSize.y, 0);
+        vec4 color = valid ? imageLoad(irradianceSnapshotI, prevCoords + offset) : vec4(0);
+        if (bank == 0) color *= 0.99;
+        if (any(isnan(color)) || any(isinf(color))) color = vec4(0);
+        imageStore(irradianceCacheI, coords + offset, color);
     }
-    writeColors[0] *= 0.99; // GI accumulation falloff
-    if (any(isnan(writeColors[0]))) writeColors[0] = vec4(0);
-    barrier();
-    memoryBarrierImage();
-    for (int k = 0; k < 2; k++) {
-        imageStore(irradianceCacheI, coords + ivec3(0, k * voxelVolumeSize.y, 0), writeColors[k]);
-    }
-    imageStore(lightStorage, coords, lightPos - ivec4(floorCamPosOffset, 0));
+    ivec4 light = valid ? imageLoad(lightStorageSnapshotI, prevCoords) : ivec4(0);
+    if (light.w > 0) {
+        light.xyz -= delta;
+        if (!VoxelHistoryCoordValid(light.xyz + voxelVolumeSize / 2)) light = ivec4(0);
+    } else light = ivec4(0);
+    imageStore(lightStorage, coords, light);
 }
 #endif
 
@@ -68,8 +64,9 @@ this program calculates volumetric block lighting
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 layout(rgba16f) uniform image3D irradianceCacheI;
-layout(rgba16i) uniform iimage3D lightStorage;
-#include "/lib/vx/SSBOs.glsl"
+layout(rgba16i) uniform writeonly iimage3D lightStorage;
+layout(rgba16i) uniform readonly iimage3D lightStorageSnapshotI;
+#include "/lib/vx/lightData.glsl"
 #include "/lib/vx/voxelReading.glsl"
 #include "/lib/util/random.glsl"
 #include "/lib/vx/positionHashing.glsl"
@@ -86,7 +83,7 @@ shared vec3[MAX_LIGHT_COUNT] lightPositions;
 shared vec3[MAX_LIGHT_COUNT] lightCols;
 shared int[MAX_LIGHT_COUNT] extraData;
 shared float[MAX_LIGHT_COUNT] weights;
-shared uint[128] lightHashMap;
+shared uint lightHashMap[1024];
 shared vec3[5] frustrumSides;
 
 const vec2[4] squareCorners = vec2[4](vec2(-1, -1), vec2(1, -1), vec2(1, 1), vec2(-1, 1));
@@ -158,18 +155,25 @@ void registerLight(ivec3 lightCoord, vec3 referencePos, float weight) {
             }
         }
     }
-    uint hash = posToHash(lightCoord) % uint(128*32);
-    bool known = !isStillLight;
-    if (isStillLight) {
-        known = (atomicOr(lightHashMap[hash/32], uint(1)<<hash%32) & uint(1)<<hash%32) != 0;
+    ivec3 volumeCoord = lightCoord + voxelVolumeSize / 2;
+    if (!isStillLight || !VoxelHistoryCoordValid(volumeCoord)) return;
+    uvec4 packedData = loadVoxelLightData(volumeCoord);
+    if ((packedData.y >> 16) == 0u) return;
+    uint key = uint(volumeCoord.x + voxelVolumeSize.x * (volumeCoord.y + voxelVolumeSize.y * volumeCoord.z)) + 1u;
+    uint slot = posToHash(lightCoord) & 1023u;
+    bool known = true;
+    for (uint probe = 0u; probe < 1024u; ++probe) {
+        uint previous = atomicCompSwap(lightHashMap[slot], 0u, key);
+        if (previous == key) return;
+        if (previous == 0u) { known = false; break; }
+        slot = (slot + 1u) & 1023u;
     }
 
     if (!known) {
         int lightIndex = atomicAdd(lightCount, 1);
         if (lightIndex < MAX_LIGHT_COUNT) {
-            uint hash = posToHash(lightCoord) % uint(1<<18);
-            uvec2 packedLightSubPos = uvec2(globalLightHashMap[4*hash], globalLightHashMap[4*hash+1]);
-            uvec2 packedLightCol = uvec2(globalLightHashMap[4*hash+2], globalLightHashMap[4*hash+3]);
+            uvec2 packedLightSubPos = packedData.xy;
+            uvec2 packedLightCol = packedData.zw;
             int thisLightExtraData = imageLoad(occupancyVolume, lightCoord + voxelVolumeSize/2).r;
             vec3 subLightPos = (packedLightSubPos.y >> 16) == 0 ? vec3(0.5) : 1.0/32.0 * vec3(packedLightSubPos.x & 0xffff, packedLightSubPos.x>>16, packedLightSubPos.y & 0xffff) / (packedLightSubPos.y >> 16) - 1;
             vec3 lightCol = 1.0/32.0 * vec3(packedLightCol.x & 0xffff, packedLightCol.x>>16, packedLightCol.y & 0xffff) / (packedLightSubPos.y >> 16);
@@ -204,9 +208,8 @@ void main() {
         lightCount = 0;
         anyInFrustrum = false;
     }
-    if (index < 128) {
-        lightHashMap[index] = 0;
-    }
+    lightHashMap[index] = 0u;
+    lightHashMap[index + 512] = 0u;
     barrier();
     memoryBarrierShared();
     vec3 sideNormal = vec3(0);
@@ -230,7 +233,11 @@ void main() {
     }
     bool hasNeighbor = false;
     int updateInterval = min(int(0.01 * dot(meanPos, meanPos) + 1.0), 10);
-    bool activeFrame = int(gl_WorkGroupID.x + gl_WorkGroupID.y + gl_WorkGroupID.z) % updateInterval == frameCounter % updateInterval;
+    bool activeFrame = !VoxelHistoryValid() || any(notEqual(VoxelCameraDelta(), ivec3(0))) ||
+        int(gl_WorkGroupID.x + gl_WorkGroupID.y + gl_WorkGroupID.z) % updateInterval == frameCounter % updateInterval;
+    #if CINEMATIC_MODE == 1
+        activeFrame = true;
+    #endif
 
     if (insideFrustrum && activeFrame) {
         anyInFrustrum = true;
@@ -248,7 +255,7 @@ void main() {
     barrier();
     memoryBarrierShared();
     if (index < MAX_LIGHT_COUNT && anyInFrustrum) {
-        ivec4 prevFrameLight = imageLoad(lightStorage, coords);
+        ivec4 prevFrameLight = imageLoad(lightStorageSnapshotI, coords);
         if (prevFrameLight.w > 0) {
             registerLight(prevFrameLight.xyz, meanPos, prevFrameLight.w * 0.0001);
         }
@@ -259,7 +266,7 @@ void main() {
         for (int k = 0; k < 6; k++) {
             ivec3 offset = (k/3*2-1) * ivec3(equal(ivec3(k%3), ivec3(0, 1, 2)));
             ivec4 prevFrameLight = imageLoad(
-                lightStorage,
+                lightStorageSnapshotI,
                 ivec3(gl_WorkGroupSize.xyz) * (ivec3(gl_WorkGroupID.xyz) + offset) +
                 ivec3(
                     index % gl_WorkGroupSize.x,
@@ -352,8 +359,10 @@ void main() {
     }
 
     if (anyInFrustrum) {
+        if (any(isnan(writeColor)) || any(isinf(writeColor))) writeColor = vec3(0);
         imageStore(irradianceCacheI, coords + ivec3(0, voxelVolumeSize.y, 0), vec4(writeColor, 1));
         ivec4 lightPosToStore = (index < lightCount && lightCoords[index].w > 0) ? lightCoords[index] : ivec4(0);
+        lightPosToStore.w = clamp(lightPosToStore.w, 0, 32767);
         imageStore(lightStorage, coords, lightPosToStore);
     }
 }
@@ -374,7 +383,14 @@ void main() {
 
     layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-    layout(rgba16f) uniform volatile image3D irradianceCacheI;
+    layout(rgba16f) uniform writeonly image3D irradianceCacheI;
+    layout(rgba16f) uniform readonly image3D irradianceSnapshotI;
+    vec4 ReadGIHistory(ivec3 p) {
+        return VoxelHistoryCoordValid(p) ? imageLoad(irradianceSnapshotI, p) : vec4(0);
+    }
+    vec3 ReadDirectHistory(ivec3 p) {
+        return VoxelHistoryCoordValid(p) ? imageLoad(irradianceSnapshotI, p + ivec3(0, voxelVolumeSize.y, 0)).rgb : vec3(0);
+    }
     #include "/lib/vx/SSBOs.glsl"
     #include "/lib/vx/voxelReading.glsl"
     #include "/lib/util/random.glsl"
@@ -398,6 +414,7 @@ void main() {
 
         #define gl_FragCoord vec4(632.5, 126.5, 1.0, 1.0)
         #include "/lib/util/spaceConversion.glsl"
+        #define shadow2D(tex, pos) vec4(texture(tex, pos))
         #include "/lib/lighting/shadowSampling.glsl"
     #endif
     #if defined OVERWORLD && defined CAVE_FOG
@@ -455,7 +472,7 @@ void main() {
                 vec4 GILight = vec4(0.0);
                 for (int k = 0; k < 6; k++) {
                     ivec3 offset = (k/3*2-1)*ivec3(k%3==0, k%3==1, k%3==2);
-                    vec4 otherLight = imageLoad(irradianceCacheI, coords + offset);
+                    vec4 otherLight = ReadGIHistory(coords + offset);
                     GILight += 0.16667 * otherLight;
                 }
                 imageStore(irradianceCacheI, coords, GILight);
@@ -484,7 +501,7 @@ void main() {
             normal = normalize(normal);
             if (any(isnan(normal))) normal = vec3(0);
             if (maxDFVal > 0.1 && length(normal) > 0.5) {
-                vec4 GILight = imageLoad(irradianceCacheI, coords);
+                vec4 GILight = ReadGIHistory(coords);
                 float weight = 1.0;
                 int intSkyLight = 0; 
                 for (int k = 0; k < 6; k++) {
@@ -493,7 +510,7 @@ void main() {
                     intSkyLight |= aroundOccupancy >> 28 & 3;
                     if ((aroundOccupancy & 1) != 0 || getDistanceField(vxPos + 0.5 * offset) < 0.2) continue;
                     float otherWeight = 0.01;
-                    GILight += otherWeight * imageLoad(irradianceCacheI, coords + offset);
+                    GILight += otherWeight * ReadGIHistory(coords + offset);
                     weight += otherWeight;
                 }
                 float skyLight = mix(vec4(0.0, 0.333, 1.0, 0.666)[intSkyLight], 1.0, 0.4 * eyeBrightness.y / 240.0);
@@ -512,9 +529,9 @@ void main() {
                         translucentCol.xyz = mix(vec3(1), translucentCol.xyz, translucentCol.w);
                     }
                     #ifdef GL_CAVE_FACTOR
-                        vec3 ambientHitCol = AMBIENT_MULT * 0.25 * skyLight * ambientColor * clamp(dir.y + 1.6, 0.6, 1) * (1-GetCaveFactor(cameraPosition.y + vxPos.y)) / GI_STRENGTH;
+                        vec3 ambientHitCol = AMBIENT_MULT * 0.25 * skyLight * ambientColor * clamp(dir.y + 1.6, 0.6, 1.0) * (1-GetCaveFactor(cameraPosition.y + vxPos.y)) / GI_STRENGTH;
                     #else
-                        vec3 ambientHitCol = AMBIENT_MULT * 0.25 * skyLight * ambientColor * clamp(dir.y + 1.6, 0.6, 1) / GI_STRENGTH;
+                        vec3 ambientHitCol = AMBIENT_MULT * 0.25 * skyLight * ambientColor * clamp(dir.y + 1.6, 0.6, 1.0) / GI_STRENGTH;
                     #endif
                     vec3 hitCol = vec3(0);
                     if (length(hitPos - vxPos) < LIGHT_TRACE_LENGTH - 0.5 && infnorm(hitPos / voxelVolumeSize) < 0.5) {
@@ -522,9 +539,10 @@ void main() {
                         for (int k = 0; k < 3; k++) {
                             hitNormal[k] = getDistanceField(hitPos + mat3(0.5)[k]) - getDistanceField(hitPos - mat3(0.5)[k]);
                         }
-                        hitNormal = normalize(hitNormal);
-                        vec3 hitBlocklight = imageLoad(irradianceCacheI, ivec3(hitPos + 0.5 * hitNormal + vec3(0.5, 1.5, 0.5) * voxelVolumeSize)).rgb;
-                        vec4 hitGIColor = imageLoad(irradianceCacheI, ivec3(hitPos + 0.5 * hitNormal + 0.5 * voxelVolumeSize - vec3(0.5)));
+                        float hitNormalLength2 = dot(hitNormal, hitNormal);
+                        hitNormal = hitNormalLength2 > 1e-12 ? hitNormal * inversesqrt(hitNormalLength2) : vec3(0);
+                        vec3 hitBlocklight = ReadDirectHistory(ivec3(floor(hitPos + 0.5 * hitNormal + 0.5 * voxelVolumeSize)));
+                        vec4 hitGIColor = ReadGIHistory(ivec3(floor(hitPos + 0.5 * hitNormal + 0.5 * voxelVolumeSize - vec3(0.5))));
                         vec3 hitGIlight = hitGIColor.rgb / max(hitGIColor.a, 0.0001);
                         if (!(length(hitNormal) > 0.5)) hitNormal = vec3(0);
                         #if defined REALTIME_SHADOWS && defined OVERWORLD
@@ -544,7 +562,7 @@ void main() {
                     if (all(greaterThanEqual(hitContrib, vec3(0)))) GILight += vec4(hitContrib, 1.0);
                 }
                 GILight += min(ambientContribution, vec4(ambientColor * 2.0, 1.0) * ambientContribution.a);
-                if (any(isnan(GILight))) GILight = vec4(0);
+                if (any(isnan(GILight)) || any(isinf(GILight))) GILight = vec4(0);
                 imageStore(irradianceCacheI, coords, GILight);
             } else {
                 imageStore(irradianceCacheI, coords, vec4(0));
